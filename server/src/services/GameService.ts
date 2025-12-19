@@ -93,7 +93,7 @@ export class GameService {
     return this.games.find(g => g.roomCode === roomCode.toUpperCase());
   }
 
-  async addPlayer(gameId: string, userId: string, username: string): Promise<GamePlayer | null> {
+  async addPlayer(gameId: string, userId: string, username: string, requestedPlayerId?: number): Promise<GamePlayer | null> {
     const game = this.getGame(gameId);
     if (!game || game.status !== 'waiting') return null;
 
@@ -105,7 +105,25 @@ export class GameService {
     if (game.players.length >= script.playerCount) return null;
     if (game.players.some(p => p.userId === userId)) return null;
 
-    const playerId = game.players.length + 1;
+    // 确定玩家号位
+    let playerId: number;
+    if (requestedPlayerId !== undefined && requestedPlayerId > 0 && requestedPlayerId <= script.playerCount) {
+      // 检查号位是否已被占用
+      if (game.players.some(p => p.playerId === requestedPlayerId)) {
+        return null; // 号位已被占用
+      }
+      playerId = requestedPlayerId;
+    } else {
+      // 自动分配：找到第一个未被使用的号位
+      playerId = 1;
+      while (game.players.some(p => p.playerId === playerId) && playerId <= script.playerCount) {
+        playerId++;
+      }
+      if (playerId > script.playerCount) {
+        return null; // 没有可用号位
+      }
+    }
+
     const player: GamePlayer = {
       userId,
       username,

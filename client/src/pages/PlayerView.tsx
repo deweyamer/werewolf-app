@@ -8,6 +8,7 @@ export default function PlayerView() {
   const { user, clearAuth } = useAuthStore();
   const { currentGame, setGame, clearGame } = useGameStore();
   const [roomCode, setRoomCode] = useState('');
+  const [selectedPlayerId, setSelectedPlayerId] = useState<number>(0);
   const [myPlayer, setMyPlayer] = useState<GamePlayer | null>(null);
   const [selectedTarget, setSelectedTarget] = useState<number>(0);
 
@@ -85,7 +86,11 @@ export default function PlayerView() {
       alert('请输入房间码');
       return;
     }
-    wsService.send({ type: 'JOIN_ROOM', roomCode: roomCode.trim().toUpperCase() });
+    wsService.send({
+      type: 'JOIN_ROOM',
+      roomCode: roomCode.trim().toUpperCase(),
+      playerId: selectedPlayerId > 0 ? selectedPlayerId : undefined
+    });
   };
 
   const handleLeaveRoom = () => {
@@ -247,6 +252,23 @@ export default function PlayerView() {
                   placeholder="输入6位房间码"
                   maxLength={6}
                 />
+              </div>
+              <div>
+                <label className="block text-white text-sm font-medium mb-2">
+                  选择号位 <span className="text-gray-400">(可选，留空则自动分配)</span>
+                </label>
+                <input
+                  type="number"
+                  value={selectedPlayerId || ''}
+                  onChange={(e) => setSelectedPlayerId(parseInt(e.target.value) || 0)}
+                  className="w-full px-4 py-2 bg-white/5 border border-white/20 rounded-lg text-white"
+                  placeholder="输入号位 (1-12)"
+                  min={1}
+                  max={12}
+                />
+                <p className="text-gray-400 text-xs mt-1">
+                  提示：选择你想要的号位，如果号位已被占用则加入失败
+                </p>
               </div>
               <button
                 onClick={handleJoinRoom}

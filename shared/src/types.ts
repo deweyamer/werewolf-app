@@ -291,7 +291,7 @@ export type ClientMessage =
   | { type: 'AUTH', token: string }
   // 房间管理
   | { type: 'CREATE_ROOM', scriptId: string }
-  | { type: 'JOIN_ROOM', roomCode: string }
+  | { type: 'JOIN_ROOM', roomCode: string, playerId?: number }
   | { type: 'LEAVE_ROOM' }
   // 上帝操作
   | { type: 'GOD_ASSIGN_ROLES', assignments: { playerId: number, roleId: string }[] }

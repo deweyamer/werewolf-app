@@ -2,7 +2,7 @@ import { useState, useEffect, useMemo } from 'react';
 import { useAuthStore } from '../stores/authStore';
 import { useGameStore } from '../stores/gameStore';
 import { wsService } from '../services/websocket';
-import { Script, ServerMessage } from '../../../shared/src/types';
+import { ScriptV2, ServerMessage } from '../../../shared/src/types';
 import { ROLES } from '../../../shared/src/constants';
 import { config } from '../config';
 import {
@@ -16,7 +16,7 @@ import { getPhaseLabel, translateDeathReason, getRoleName } from '../utils/phase
 export default function GodConsole() {
   const { user, token, clearAuth } = useAuthStore();
   const { currentGame, setGame, clearGame } = useGameStore();
-  const [scripts, setScripts] = useState<Script[]>([]);
+  const [scripts, setScripts] = useState<ScriptV2[]>([]);
   const [selectedScript, setSelectedScript] = useState('');
   const [roomCode, setRoomCode] = useState('');
   const [showRoleAssignment, setShowRoleAssignment] = useState(false);
@@ -86,25 +86,37 @@ export default function GodConsole() {
   };
 
   const handleRandomAssignRoles = () => {
-    if (!currentGame || !currentScript) return;
+    if (!currentGame || !currentScript || currentScriptRoles.length === 0) {
+      alert('无法随机分配：游戏或剧本信息缺失');
+      return;
+    }
 
     // 构建角色池
     const rolePool: string[] = [];
-    currentScript.roles.forEach(role => {
+    currentScriptRoles.forEach(role => {
       for (let i = 0; i < role.count; i++) {
         rolePool.push(role.id);
       }
     });
 
-    // 洗牌算法
+    // 验证角色池和玩家数量是否匹配
+    if (rolePool.length !== currentGame.players.length) {
+      alert(`错误：角色数量(${rolePool.length})与玩家数量(${currentGame.players.length})不匹配！`);
+      return;
+    }
+
+    // 洗牌算法（Fisher-Yates）
     for (let i = rolePool.length - 1; i > 0; i--) {
       const j = Math.floor(Math.random() * (i + 1));
       [rolePool[i], rolePool[j]] = [rolePool[j], rolePool[i]];
     }
 
+    // 按照玩家号位排序，确保分配顺序正确
+    const sortedPlayers = [...currentGame.players].sort((a, b) => a.playerId - b.playerId);
+
     // 分配给玩家
     const newAssignments: { [key: number]: string } = {};
-    currentGame.players.forEach((player, index) => {
+    sortedPlayers.forEach((player, index) => {
       newAssignments[player.playerId] = rolePool[index];
     });
 
@@ -113,13 +125,27 @@ export default function GodConsole() {
   };
 
   const handleAssignRoles = () => {
-    const assignments = Object.entries(roleAssignments).map(([playerId, roleId]) => ({
-      playerId: Number(playerId),
-      roleId,
-    }));
+    if (!currentGame) return;
 
-    if (assignments.length !== currentGame?.players.length) {
-      alert('请为所有玩家分配角色');
+    // 检查是否所有玩家都已分配角色
+    const assignments = Object.entries(roleAssignments)
+      .filter(([_, roleId]) => roleId) // 过滤掉空角色
+      .map(([playerId, roleId]) => ({
+        playerId: Number(playerId),
+        roleId,
+      }));
+
+    if (assignments.length !== currentGame.players.length) {
+      alert(`请为所有玩家分配角色！当前已分配 ${assignments.length}/${currentGame.players.length} 个角色`);
+      return;
+    }
+
+    // 验证每个玩家都有角色
+    const missingPlayers = currentGame.players.filter(
+      p => !roleAssignments[p.playerId]
+    );
+    if (missingPlayers.length > 0) {
+      alert(`以下玩家还未分配角色：${missingPlayers.map(p => `${p.playerId}号`).join(', ')}`);
       return;
     }
 
@@ -143,6 +169,23 @@ export default function GodConsole() {
   };
 
   const currentScript = scripts.find((s) => s.id === currentGame?.scriptId);
+
+  // 将 ScriptV2 的 roleComposition 转换为 RoleConfig 数组
+  const currentScriptRoles = useMemo(() => {
+    if (!currentScript) return [];
+
+    return Object.entries(currentScript.roleComposition).map(([roleId, count]) => {
+      const roleInfo = ROLES[roleId];
+      return {
+        id: roleId,
+        name: roleInfo?.name || roleId,
+        camp: roleInfo?.camp || 'good',
+        count: count,
+        abilities: roleInfo?.abilities || [],
+        description: roleInfo?.description || ''
+      };
+    });
+  }, [currentScript]);
 
   // 使用 useMemo 缓存统计数据计算
   const gameOverview = useMemo(() => {
@@ -441,15 +484,21 @@ export default function GodConsole() {
                           </span>
                         </td>
                         <td className="py-3">
-                          <span
-                            className={`px-2 py-1 rounded text-sm font-bold ${
-                              player.camp === 'wolf'
-                                ? 'bg-red-600/50 text-red-200'
-                                : 'bg-green-600/50 text-green-200'
-                            }`}
-                          >
-                            {player.camp === 'wolf' ? '狼人' : '好人'}
-                          </span>
+                          {player.role ? (
+                            <span
+                              className={`px-2 py-1 rounded text-sm font-bold ${
+                                player.camp === 'wolf'
+                                  ? 'bg-red-600/50 text-red-200'
+                                  : 'bg-green-600/50 text-green-200'
+                              }`}
+                            >
+                              {player.camp === 'wolf' ? '狼人' : '好人'}
+                            </span>
+                          ) : (
+                            <span className="px-2 py-1 rounded text-sm text-gray-400">
+                              未分配
+                            </span>
+                          )}
                         </td>
                         <td className="py-3">
                           <span
@@ -670,7 +719,9 @@ export default function GodConsole() {
                     <h4 className="text-white font-bold mb-3">🎭 神职技能状态</h4>
                     <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-3">
                       {playerStats.map((player) => {
-                        const status = getRoleStatusText(currentGame.players.find(p => p.playerId === player.playerId)!);
+                        const gamePlayer = currentGame.players.find(p => p.playerId === player.playerId);
+                        if (!gamePlayer) return null;
+                        const status = getRoleStatusText(gamePlayer);
                         if (status === '正常' || !player.alive) return null;
                         return (
                           <div key={player.playerId} className="text-gray-300 text-sm p-2 bg-white/5 rounded">
@@ -733,7 +784,7 @@ export default function GodConsole() {
           </div>
         )}
 
-        {showRoleAssignment && currentGame && currentScript && (
+        {showRoleAssignment && currentGame && currentScript && currentScriptRoles.length > 0 && (
           <div className="fixed inset-0 bg-black/50 flex items-center justify-center p-4 z-50">
             <div className="bg-gray-900 rounded-2xl p-8 max-w-2xl w-full border border-white/20">
               <div className="flex justify-between items-center mb-6">
@@ -747,9 +798,9 @@ export default function GodConsole() {
               </div>
 
               <div className="mb-4 p-4 bg-blue-600/20 border border-blue-500/50 rounded-lg">
-                <h4 className="text-white font-bold mb-2">剧本配置：{currentScript.name}</h4>
+                <h4 className="text-white font-bold mb-2">剧本配置：{currentScript?.name}</h4>
                 <div className="text-gray-200 text-sm space-y-1">
-                  {currentScript.roles.map(role => (
+                  {currentScriptRoles.map(role => (
                     <div key={role.id} className="flex justify-between">
                       <span>{role.name} x{role.count}</span>
                       <span className={role.camp === 'wolf' ? 'text-red-300' : 'text-green-300'}>
@@ -761,7 +812,7 @@ export default function GodConsole() {
               </div>
 
               <div className="space-y-4 max-h-96 overflow-y-auto">
-                {currentGame.players.map((player) => (
+                {[...currentGame.players].sort((a, b) => a.playerId - b.playerId).map((player) => (
                   <div key={player.playerId} className="flex items-center gap-4">
                     <div className="text-white w-32">{player.playerId}号 - {player.username}</div>
                     <select
@@ -772,7 +823,7 @@ export default function GodConsole() {
                       className="flex-1 px-4 py-2 bg-white/5 border border-white/20 rounded-lg text-white"
                     >
                       <option value="" className="text-gray-900 bg-white">选择角色</option>
-                      {currentScript.roles.map((role) => (
+                      {currentScriptRoles.map((role) => (
                         <option key={role.id} value={role.id} className="text-gray-900 bg-white">
                           {role.name} ({role.camp === 'wolf' ? '狼人' : '好人'})
                         </option>

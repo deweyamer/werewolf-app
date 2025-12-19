@@ -90,7 +90,7 @@ export class SocketManager {
         break;
 
       case 'JOIN_ROOM':
-        await this.handleJoinRoom(socket, message.roomCode, send);
+        await this.handleJoinRoom(socket, message.roomCode, send, message.playerId);
         break;
 
       case 'LEAVE_ROOM':
@@ -168,7 +168,7 @@ export class SocketManager {
     send({ type: 'GAME_STATE_UPDATE', game });
   }
 
-  private async handleJoinRoom(socket: Socket, roomCode: string, send: (msg: ServerMessage) => void) {
+  private async handleJoinRoom(socket: Socket, roomCode: string, send: (msg: ServerMessage) => void, requestedPlayerId?: number) {
     const user = this.socketUsers.get(socket.id);
     if (!user) {
       send({ type: 'ERROR', message: '需要先认证' });
@@ -192,9 +192,9 @@ export class SocketManager {
         console.log(`Player ${user.username} reconnected to game ${game.id}`);
       } else {
         // 新玩家加入
-        const player = await this.gameService.addPlayer(game.id, user.userId, user.username);
+        const player = await this.gameService.addPlayer(game.id, user.userId, user.username, requestedPlayerId);
         if (!player) {
-          send({ type: 'ERROR', message: '加入房间失败' });
+          send({ type: 'ERROR', message: requestedPlayerId ? `号位 ${requestedPlayerId} 已被占用或无效` : '加入房间失败' });
           return;
         }
 

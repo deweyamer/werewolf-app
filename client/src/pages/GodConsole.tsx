@@ -5,7 +5,6 @@ import { wsService } from '../services/websocket';
 import { Script, ServerMessage } from '../../../shared/src/types';
 import { ROLES } from '../../../shared/src/constants';
 import { config } from '../config';
-<<<<<<< HEAD
 import {
   calculateGameOverview,
   calculatePlayerStats,
@@ -13,8 +12,6 @@ import {
   getRoleStatusText
 } from '../utils/gameStats';
 import { getPhaseLabel, translateDeathReason, getRoleName } from '../utils/phaseLabels';
-=======
->>>>>>> 5cb70b24016b25ab53f624fe1565addf1817e381
 
 export default function GodConsole() {
   const { user, token, clearAuth } = useAuthStore();
@@ -208,15 +205,11 @@ export default function GodConsole() {
       玩家角色信息: currentGame.players.map(p => ({
         号位: `${p.playerId}号`,
         玩家名: p.username,
-        角色: p.role || '未分配',
+        角色: p.role ? getRoleName(p.role) : '未分配',
         阵营: p.camp === 'wolf' ? '狼人' : '好人',
         是否存活: p.alive ? '存活' : '已出局',
         是否警长: p.isSheriff ? '是' : '否',
-        出局原因: p.outReason ?
-          (p.outReason === 'wolfKill' ? '被狼人刀杀' :
-           p.outReason === 'poison' ? '被女巫毒死' :
-           p.outReason === 'vote' ? '被投票放逐' :
-           p.outReason === 'dreamerKilled' ? '摄梦人殉职' : p.outReason) : '未出局',
+        出局原因: p.outReason ? translateDeathReason(p.outReason) : '未出局',
       })),
       游戏流程: groupHistoryByRounds().reverse().map(({ round, logs }) => ({
         回合: round === 0 ? '游戏准备' : `第${round}回合`,

@@ -4,7 +4,12 @@
       "Bash(git push:*)",
       "Bash(git config:*)",
       "Bash(git remote set-url:*)",
-      "Bash(git remote add:*)"
+      "Bash(git remote add:*)",
+      "Bash(tasklist)",
+      "Bash(findstr \"node\")",
+      "Bash(netstat:*)",
+      "Bash(findstr:*)",
+      "Bash(taskkill:*)"
     ]
   }
 }

@@ -5,6 +5,7 @@ import { wsService } from '../services/websocket';
 import { Script, ServerMessage } from '../../../shared/src/types';
 import { ROLES } from '../../../shared/src/constants';
 import { config } from '../config';
+<<<<<<< HEAD
 import {
   calculateGameOverview,
   calculatePlayerStats,
@@ -12,6 +13,8 @@ import {
   getRoleStatusText
 } from '../utils/gameStats';
 import { getPhaseLabel, translateDeathReason, getRoleName } from '../utils/phaseLabels';
+=======
+>>>>>>> 5cb70b24016b25ab53f624fe1565addf1817e381
 
 export default function GodConsole() {
   const { user, token, clearAuth } = useAuthStore();

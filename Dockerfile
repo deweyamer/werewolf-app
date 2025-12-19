@@ -1,27 +1,23 @@
 # 狼人杀游戏 - Docker镜像
 
 # ========================================
-# 阶段1: 构建 shared + server
+# 阶段1: 构建 server
 # ========================================
 FROM node:18-alpine AS server-builder
 
 WORKDIR /app
 
-# 复制根目录 tsconfig
-COPY tsconfig.json ./
-
-# 复制 shared
-COPY shared/package*.json ./shared/
-COPY shared/tsconfig.json ./shared/
-COPY shared/src ./shared/src
+# 复制 shared 源码（server 直接引用源文件）
+COPY shared ./shared
 
 # 复制 server
 COPY server/package*.json ./server/
 COPY server/tsconfig.json ./server/
 COPY server/src ./server/src
 
-# 安装并构建 server（会自动引用 shared）
-RUN cd server && npm install && npm run build
+# 安装依赖并构建
+WORKDIR /app/server
+RUN npm install && npm run build
 
 # ========================================
 # 阶段2: 构建前端
@@ -30,13 +26,8 @@ FROM node:18-alpine AS client-builder
 
 WORKDIR /app
 
-# 复制根目录 tsconfig
-COPY tsconfig.json ./
-
-# 复制 shared
-COPY shared/package*.json ./shared/
-COPY shared/tsconfig.json ./shared/
-COPY shared/src ./shared/src
+# 复制 shared 源码
+COPY shared ./shared
 
 # 复制 client
 COPY client/package*.json ./client/
@@ -48,9 +39,10 @@ COPY client/postcss.config.js ./client/
 COPY client/src ./client/src
 
 # 安装并构建 client
+WORKDIR /app/client
 ARG VITE_API_URL=/api
 ENV VITE_API_URL=$VITE_API_URL
-RUN cd client && npm install && npm run build
+RUN npm install && npm run build
 
 # ========================================
 # 阶段3: 生产环境镜像

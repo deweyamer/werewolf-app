@@ -1,0 +1,28 @@
+services:
+  # 后端服务
+  - type: web
+    name: werewolf-server
+    runtime: node
+    region: oregon
+    plan: free
+    buildCommand: cd server && npm install && npm run build
+    startCommand: cd server && node dist/index.js
+    envVars:
+      - key: NODE_ENV
+        value: production
+      - key: PORT
+        value: 3001
+    healthCheckPath: /health
+
+  # 前端服务
+  - type: web
+    name: werewolf-client
+    runtime: node
+    region: oregon
+    plan: free
+    buildCommand: cd client && npm install && npm run build
+    staticPublishPath: ./client/dist
+    routes:
+      - type: rewrite
+        source: /*
+        destination: /index.html

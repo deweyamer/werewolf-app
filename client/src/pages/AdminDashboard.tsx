@@ -2,6 +2,7 @@ import { useState, useEffect } from 'react';
 import { useAuthStore } from '../stores/authStore';
 import { wsService } from '../services/websocket';
 import { User } from '../../../shared/src/types';
+import { config } from '../config';
 
 export default function AdminDashboard() {
   const { user, token, clearAuth } = useAuthStore();
@@ -15,7 +16,7 @@ export default function AdminDashboard() {
 
   const loadUsers = async () => {
     try {
-      const response = await fetch('http://localhost:3001/api/admin/users', {
+      const response = await fetch(`${config.apiUrl}/admin/users`, {
         headers: { Authorization: `Bearer ${token}` },
       });
       const data = await response.json();
@@ -30,7 +31,7 @@ export default function AdminDashboard() {
   const handleCreateUser = async (e: React.FormEvent) => {
     e.preventDefault();
     try {
-      const response = await fetch('http://localhost:3001/api/admin/users', {
+      const response = await fetch(`${config.apiUrl}/admin/users`, {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
@@ -57,7 +58,7 @@ export default function AdminDashboard() {
     if (!confirm('确定要删除此用户吗？')) return;
 
     try {
-      const response = await fetch(`http://localhost:3001/api/admin/users/${userId}`, {
+      const response = await fetch(`${config.apiUrl}/admin/users/${userId}`, {
         method: 'DELETE',
         headers: { Authorization: `Bearer ${token}` },
       });

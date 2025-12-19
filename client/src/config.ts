@@ -4,7 +4,7 @@ const isDev = import.meta.env.DEV;
 export const config = {
   // API基础URL - 生产环境使用相对路径 /api，通过nginx代理
   apiUrl: isDev
-    ? 'http://localhost:3001'
+    ? 'http://localhost:3001/api'
     : (import.meta.env.VITE_API_URL ?? '/api'),
 
   // WebSocket URL - 生产环境使用相对路径，自动拼接当前host

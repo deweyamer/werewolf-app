@@ -3,9 +3,19 @@
 // ============================================
 
 export type UserRole = 'admin' | 'god' | 'player';
-export type GamePhase = 'lobby' | 'fear' | 'dream' | 'wolf' | 'witch' | 'seer' | 'settle' | 'sheriffElection' | 'vote' | 'hunter' | 'daySettle' | 'finished';
+export type GamePhase = 'lobby' | 'fear' | 'dream' | 'gargoyle' | 'guard' | 'wolf' | 'wolf_beauty' | 'witch' | 'seer' | 'gravekeeper' | 'settle' | 'sheriffElection' | 'sheriffCampaign' | 'sheriffVote' | 'discussion' | 'vote' | 'voteResult' | 'hunter' | 'knight' | 'daySettle' | 'finished';
 export type Camp = 'wolf' | 'good';
 export type GameStatus = 'waiting' | 'running' | 'paused' | 'finished';
+
+// 游戏阶段类型
+export type GamePhaseType = 'night' | 'day' | 'transition';
+
+// 夜间子阶段
+export type NightSubPhase = 'fear' | 'dream' | 'gargoyle' | 'guard' | 'wolf' | 'wolf_beauty' | 'witch' | 'seer' | 'gravekeeper' | 'settle';
+
+// 白天子阶段
+export type DaySubPhase = 'sheriffElection' | 'sheriffCampaign' | 'sheriffVote' |
+                          'discussion' | 'vote' | 'voteResult' | 'hunter' | 'knight' | 'daySettle';
 
 // ============================================
 // 用户相关
@@ -73,6 +83,58 @@ export interface Script {
 }
 
 // ============================================
+// 剧本V2（新架构）
+// ============================================
+
+/**
+ * 剧本难度
+ */
+export type ScriptDifficulty = 'easy' | 'medium' | 'hard';
+
+/**
+ * 剧本V2数据结构
+ * 核心设计：剧本只负责角色组合，phases由系统动态生成
+ */
+export interface ScriptV2 {
+  id: string;
+  name: string;
+  description: string;
+  playerCount: number; // 固定12人
+
+  // 核心：角色组合（roleId -> 数量）
+  roleComposition: {
+    [roleId: string]: number;
+  };
+
+  // 可选：规则变体配置
+  ruleVariants?: {
+    firstNight?: {
+      witchCanSaveSelf?: boolean;
+      skipSheriffElection?: boolean;
+    };
+    skillInteractions?: {
+      witchCanSavePoisonSame?: boolean;
+      guardCanProtectSame?: boolean;
+      dreamerKillNights?: number;
+    };
+    winConditions?: {
+      type: 'standard' | 'slaughter';
+      customCondition?: string;
+    };
+    specialRules?: string[];
+  };
+
+  // 元数据
+  difficulty: ScriptDifficulty;
+  tags: string[];
+  rules: string; // Markdown规则说明
+
+  // 时间戳
+  createdAt: string;
+  updatedAt: string;
+}
+
+// ============================================
 // 游戏相关
 // ============================================
 export interface GamePlayer {
@@ -87,9 +149,32 @@ export interface GamePlayer {
   feared?: boolean; // 是否被恐惧
   // 角色技能状态
   abilities: {
+    // 通用
+    hasNightAction?: boolean; // 是否有夜间行动
+
+    // 女巫
     antidote?: boolean; // 女巫解药
     poison?: boolean; // 女巫毒药
+
+    // 摄梦人
+    lastDreamTarget?: number; // 摄梦人上一晚梦游的目标
+    dreamKillReady?: boolean; // 摄梦人是否准备好梦死目标(连续2晚)
+
+    // 守卫
+    lastGuardTarget?: number; // 守卫上次守护的目标
+
+    // 骑士
+    knightDuelUsed?: boolean; // 骑士决斗是否已使用
+
+    // 白狼王
+    whiteWolfBoomUsed?: boolean; // 白狼王自爆是否已使用
+
+    // 可扩展其他角色技能状态
+    [key: string]: any;
   };
+  // 警长竞选相关
+  sheriffCandidate?: boolean; // 是否上警
+  sheriffWithdrawn?: boolean; // 是否退水
 }
 
 export interface ActionLog {
@@ -105,6 +190,24 @@ export interface ActionLog {
   visible: 'all' | 'god' | 'self'; // 可见性
 }
 
+// 警长竞选状态
+export interface SheriffElectionState {
+  phase: 'signup' | 'campaign' | 'voting' | 'done'; // 上警 | 竞选发言 | 投票 | 完成
+  candidates: number[]; // 上警的玩家号位
+  withdrawn: number[];  // 退水的玩家
+  votes: { [voterId: number]: number | 'skip' }; // 投票记录
+  result?: number;      // 当选警长
+}
+
+// 放逐投票状态
+export interface ExileVoteState {
+  phase: 'voting' | 'pk' | 'done'; // 投票 | 平票PK | 完成
+  votes: { [voterId: number]: number | 'skip' }; // 投票或弃票
+  result?: number | 'tie' | 'none'; // 结果:被放逐玩家 | 平票 | 无人出局
+  pkPlayers?: number[];    // 平票PK玩家
+  pkVotes?: { [voterId: number]: number | 'skip' }; // PK投票
+}
+
 export interface Game {
   id: string;
   roomCode: string; // 6位房间码
@@ -114,24 +217,48 @@ export interface Game {
   hostUsername: string;
   players: GamePlayer[];
   status: GameStatus;
-  currentPhase: GamePhase;
+
+  // 回合和阶段信息
   currentRound: number;
+  currentPhase: GamePhase;
+  currentPhaseType: GamePhaseType; // 'night' | 'day' | 'transition'
+
   history: ActionLog[];
   sheriffId: number; // 警长号位（0表示无警长）
   sheriffElectionDone: boolean;
+
+  // 警长竞选系统
+  sheriffElection?: SheriffElectionState;
+
+  // 放逐投票系统
+  exileVote?: ExileVoteState;
+
   // 夜间操作缓存（增强版：包含提交状态和结果）
   nightActions: {
     // 恐惧阶段
     fear?: number;
     fearSubmitted?: boolean;
 
-    // 守护阶段
+    // 守护阶段（摄梦人）
     dream?: number;
     dreamSubmitted?: boolean;
+
+    // 石像鬼阶段
+    gargoyleTarget?: number;
+    gargoyleSubmitted?: boolean;
+
+    // 守卫阶段
+    guardTarget?: number;
+    guardSubmitted?: boolean;
 
     // 狼人阶段
     wolfKill?: number;
     wolfSubmitted?: boolean;
+    wolfVotes?: { [wolfId: number]: number }; // 狼人投票记录
+
+    // 狼美人阶段
+    wolfBeautyTarget?: number;
+    wolfBeautySubmitted?: boolean;
 
     // 女巫阶段
     witchAction?: 'none' | 'save' | 'poison';
@@ -143,6 +270,10 @@ export interface Game {
     seerCheck?: number;
     seerResult?: 'wolf' | 'good';
     seerSubmitted?: boolean;
+
+    // 守墓人阶段
+    gravekeeperTarget?: number;
+    gravekeeperSubmitted?: boolean;
   };
   createdAt: string;
   startedAt?: string;
@@ -169,11 +300,13 @@ export type ClientMessage =
   | { type: 'GOD_FORCE_ACTION', playerId: number, action: any }
   // 玩家操作
   | { type: 'PLAYER_SUBMIT_ACTION', action: PlayerAction }
-  // 警长相关
-  | { type: 'SHERIFF_CANDIDATES', candidates: number[] }
-  | { type: 'SHERIFF_ELECT', sheriffId: number }
-  | { type: 'SHERIFF_PASS', targetId: number }
-  | { type: 'SHERIFF_TEAR' };
+  // 警长竞选相关
+  | { type: 'SHERIFF_SIGNUP', runForSheriff: boolean } // 上警/不上警
+  | { type: 'SHERIFF_WITHDRAW' } // 退水
+  | { type: 'SHERIFF_VOTE', candidateId: number | 'skip' } // 投票
+  // 放逐投票相关
+  | { type: 'EXILE_VOTE', targetId: number | 'skip' } // 放逐投票
+  | { type: 'EXILE_PK_VOTE', targetId: number | 'skip' }; // 平票PK投票
 
 export interface PlayerAction {
   phase: GamePhase;
@@ -197,14 +330,18 @@ export type ServerMessage =
   | { type: 'PLAYER_LEFT', playerId: number }
   // 游戏状态更新
   | { type: 'GAME_STATE_UPDATE', game: Game }
-  | { type: 'PHASE_CHANGED', phase: GamePhase, prompt: string }
+  | { type: 'PHASE_CHANGED', phase: GamePhase, prompt: string, phaseType: GamePhaseType }
   | { type: 'PLAYER_ACTION_SUBMITTED', playerId: number, actionType: string }
   | { type: 'ROUND_STARTED', round: number }
   | { type: 'GAME_FINISHED', winner: 'wolf' | 'good' }
   // 角色分配（仅发给对应玩家）
-  | { type: 'ROLE_ASSIGNED', playerId: number, role: string, camp: Camp }
+  | { type: 'ROLE_ASSIGNED', playerId: number, role: string, camp: Camp, hasNightAction: boolean }
   // 操作结果反馈
   | { type: 'ACTION_RESULT', success: boolean, message: string }
+  // 警长竞选更新
+  | { type: 'SHERIFF_ELECTION_UPDATE', state: SheriffElectionState }
+  // 放逐投票更新
+  | { type: 'EXILE_VOTE_UPDATE', state: ExileVoteState }
   // 错误消息
   | { type: 'ERROR', message: string, code?: string };
 

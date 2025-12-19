@@ -1,9 +1,12 @@
 import fs from 'fs/promises';
 import path from 'path';
 import { v4 as uuidv4 } from 'uuid';
-import { Game, GamePlayer, ActionLog, GamePhase, PlayerAction } from '../../../shared/src/types.js';
+import { Game, GamePlayer, ActionLog, GamePhase, PlayerAction, GamePhaseType } from '../../../shared/src/types.js';
 import { ROOM_CODE_LENGTH, PHASES } from '../../../shared/src/constants.js';
 import { ScriptService } from './ScriptService.js';
+import { VotingSystem } from '../game/VotingSystem.js';
+import { RoleRegistry } from '../game/roles/RoleRegistry.js';
+import { GameFlowEngine } from '../game/flow/GameFlowEngine.js';
 
 const DATA_DIR = path.join(process.cwd(), 'data');
 const GAMES_FILE = path.join(DATA_DIR, 'games.json');
@@ -11,9 +14,13 @@ const GAMES_FILE = path.join(DATA_DIR, 'games.json');
 export class GameService {
   private games: Game[] = [];
   private scriptService: ScriptService;
+  private votingSystem: VotingSystem;
+  private gameFlowEngine: GameFlowEngine;
 
   constructor(scriptService: ScriptService) {
     this.scriptService = scriptService;
+    this.votingSystem = new VotingSystem();
+    this.gameFlowEngine = new GameFlowEngine();
   }
 
   async init() {
@@ -44,8 +51,10 @@ export class GameService {
   }
 
   async createGame(hostId: string, hostUsername: string, scriptId: string): Promise<Game | null> {
-    const script = this.scriptService.getScript(scriptId);
-    if (!script) return null;
+    const scriptWithPhases = this.scriptService.getScript(scriptId);
+    if (!scriptWithPhases) return null;
+
+    const { script } = scriptWithPhases;
 
     let roomCode = this.generateRoomCode();
     while (this.games.some(g => g.roomCode === roomCode)) {
@@ -62,6 +71,7 @@ export class GameService {
       players: [],
       status: 'waiting',
       currentPhase: 'lobby',
+      currentPhaseType: 'transition',
       currentRound: 0,
       history: [],
       sheriffId: 0,
@@ -87,8 +97,10 @@ export class GameService {
     const game = this.getGame(gameId);
     if (!game || game.status !== 'waiting') return null;
 
-    const script = this.scriptService.getScript(game.scriptId);
-    if (!script) return null;
+    const scriptWithPhases = this.scriptService.getScript(game.scriptId);
+    if (!scriptWithPhases) return null;
+
+    const { script } = scriptWithPhases;
 
     if (game.players.length >= script.playerCount) return null;
     if (game.players.some(p => p.userId === userId)) return null;
@@ -131,22 +143,29 @@ export class GameService {
     const game = this.getGame(gameId);
     if (!game || game.status !== 'waiting') return false;
 
-    const script = this.scriptService.getScript(game.scriptId);
-    if (!script) return false;
+    const scriptWithPhases = this.scriptService.getScript(game.scriptId);
+    if (!scriptWithPhases) return false;
+
+    const { script } = scriptWithPhases;
 
     for (const assignment of assignments) {
       const player = game.players.find(p => p.playerId === assignment.playerId);
-      const roleConfig = script.roles.find(r => r.id === assignment.roleId);
-      if (!player || !roleConfig) return false;
+      if (!player) return false;
 
-      player.role = roleConfig.name;
-      player.camp = roleConfig.camp;
+      // 验证roleId是否在剧本的roleComposition中
+      if (!script.roleComposition[assignment.roleId]) {
+        return false;
+      }
+
+      // 使用角色处理器获取角色信息
+      const roleHandler = RoleRegistry.getHandler(assignment.roleId);
+      if (!roleHandler) return false;
+
+      player.role = assignment.roleId;
+      player.camp = roleHandler.camp;
 
       // 初始化角色技能
-      if (roleConfig.id === 'witch') {
-        player.abilities.antidote = true;
-        player.abilities.poison = true;
-      }
+      roleHandler.initializeAbilities(player);
     }
 
     await this.saveGames();
@@ -157,15 +176,28 @@ export class GameService {
     const game = this.getGame(gameId);
     if (!game || game.status !== 'waiting') return false;
 
-    const script = this.scriptService.getScript(game.scriptId);
-    if (!script) return false;
+    const scriptWithPhases = this.scriptService.getScript(game.scriptId);
+    if (!scriptWithPhases) return false;
+
+    const { script, phases } = scriptWithPhases;
 
     if (game.players.length !== script.playerCount) return false;
     if (game.players.some(p => !p.role)) return false;
 
     game.status = 'running';
     game.currentRound = 1;
-    game.currentPhase = 'fear';
+
+    // 动态确定第一个夜间阶段
+    const firstNightPhase = phases.find(p => p.isNightPhase);
+    if (firstNightPhase) {
+      game.currentPhase = firstNightPhase.id;
+      game.currentPhaseType = 'night';
+    } else {
+      // 如果没有夜间阶段，直接进入白天
+      game.currentPhase = 'discussion';
+      game.currentPhaseType = 'day';
+    }
+
     game.startedAt = new Date().toISOString();
 
     await this.saveGames();
@@ -178,73 +210,13 @@ export class GameService {
       return { success: false, message: '游戏不存在或未开始' };
     }
 
-    const player = game.players.find(p => p.playerId === action.playerId);
-    if (!player || !player.alive) {
-      return { success: false, message: '玩家不存在或已出局' };
-    }
+    // 使用GameFlowEngine处理行动
+    const result = await this.gameFlowEngine.submitAction(game, action);
 
-    let responseData: any = {};
-
-    // 根据不同阶段处理操作
-    switch (action.phase) {
-      case 'fear':
-        game.nightActions.fear = action.target;
-        game.nightActions.fearSubmitted = true;
-        break;
-      case 'dream':
-        game.nightActions.dream = action.target;
-        game.nightActions.dreamSubmitted = true;
-        break;
-      case 'wolf':
-        game.nightActions.wolfKill = action.target;
-        game.nightActions.wolfSubmitted = true;
-        break;
-      case 'witch':
-        game.nightActions.witchAction = action.actionType as 'none' | 'save' | 'poison';
-        game.nightActions.witchTarget = action.target;
-        game.nightActions.witchSubmitted = true;
-        // 女巫知道被刀的人
-        if (!game.nightActions.witchKnowsVictim && game.nightActions.wolfKill) {
-          game.nightActions.witchKnowsVictim = game.nightActions.wolfKill;
-          responseData.victimInfo = game.nightActions.wolfKill;
-        }
-        break;
-      case 'seer':
-        if (action.target) {
-          game.nightActions.seerCheck = action.target;
-          const target = game.players.find(p => p.playerId === action.target);
-          if (target) {
-            game.nightActions.seerResult = target.camp === 'wolf' ? 'wolf' : 'good';
-            responseData.seerResult = {
-              playerId: action.target,
-              result: game.nightActions.seerResult,
-              message: `${action.target}号是${game.nightActions.seerResult === 'wolf' ? '狼人' : '好人'}`
-            };
-          }
-        }
-        game.nightActions.seerSubmitted = true;
-        break;
-      default:
-        return { success: false, message: '无效的操作阶段' };
-    }
-
-    const log: ActionLog = {
-      id: uuidv4(),
-      timestamp: new Date().toISOString(),
-      round: game.currentRound,
-      phase: action.phase,
-      actorId: player.userId,
-      actorPlayerId: player.playerId,
-      action: action.actionType,
-      target: action.target,
-      result: `${player.playerId}号完成操作`,
-      visible: 'god',
-    };
-
-    game.history.push(log);
+    // 保存游戏状态
     await this.saveGames();
 
-    return { success: true, message: '操作成功', data: responseData };
+    return result;
   }
 
   async advancePhase(gameId: string): Promise<{ success: boolean; nextPhase: GamePhase; prompt: string }> {
@@ -253,129 +225,33 @@ export class GameService {
       return { success: false, nextPhase: 'lobby', prompt: '游戏不存在或未开始' };
     }
 
-    const script = this.scriptService.getScript(game.scriptId);
-    if (!script) {
+    const scriptWithPhases = this.scriptService.getScript(game.scriptId);
+    if (!scriptWithPhases) {
       return { success: false, nextPhase: 'lobby', prompt: '剧本不存在' };
     }
 
-    const currentPhaseConfig = script.phases.find(p => p.id === game.currentPhase);
-    if (!currentPhaseConfig) {
-      return { success: false, nextPhase: 'lobby', prompt: '当前阶段配置错误' };
-    }
+    const { phases } = scriptWithPhases;
 
-    // 找到下一个阶段
-    const nextPhaseConfig = script.phases.find(p => p.order === currentPhaseConfig.order + 1);
-    if (!nextPhaseConfig) {
-      return { success: false, nextPhase: 'lobby', prompt: '没有下一个阶段' };
-    }
+    // 使用GameFlowEngine推进阶段
+    const result = await this.gameFlowEngine.advancePhase(game, phases);
 
-    // 特殊处理：夜间结算
-    if (game.currentPhase === 'seer') {
-      await this.settleNight(game);
-    }
-
-    // 特殊处理：警长竞选（仅第一轮）
-    if (nextPhaseConfig.id === 'sheriffElection' && game.sheriffElectionDone) {
-      const votePhase = script.phases.find(p => p.id === 'vote');
-      if (votePhase) {
-        game.currentPhase = 'vote';
-        await this.saveGames();
-        return { success: true, nextPhase: 'vote', prompt: '进入投票放逐阶段' };
-      }
-    }
-
-    game.currentPhase = nextPhaseConfig.id;
-
-    // 检查游戏是否结束
-    const winner = this.checkWinner(game);
-    if (winner) {
-      game.status = 'finished';
-      game.currentPhase = 'finished';
-      game.winner = winner;
-      game.finishedAt = new Date().toISOString();
-    }
-
+    // 保存游戏状态
     await this.saveGames();
-    return { success: true, nextPhase: game.currentPhase, prompt: nextPhaseConfig.description };
-  }
 
-  private async settleNight(game: Game) {
-    const deaths: number[] = [];
-    const { fear, dream, wolfKill, witchAction, witchTarget } = game.nightActions;
-
-    // 处理狼刀
-    let actualKill = wolfKill || 0;
-
-    // 摄梦人守护
-    if (dream && dream === actualKill) {
-      const dreamer = game.players.find(p => p.role === '摄梦人');
-      if (dreamer && dreamer.alive) {
-        dreamer.alive = false;
-        dreamer.outReason = 'dreamerKilled';
-        deaths.push(dreamer.playerId);
-        actualKill = 0; // 被守护者不死
-      }
+    // 如果游戏结束，返回结束信息
+    if (result.finished) {
+      return {
+        success: true,
+        nextPhase: 'finished',
+        prompt: result.message || '游戏结束',
+      };
     }
 
-    // 女巫救人
-    if (witchAction === 'save' && actualKill) {
-      const witch = game.players.find(p => p.role === '女巫');
-      if (witch) {
-        witch.abilities.antidote = false;
-      }
-      actualKill = 0;
-    }
-
-    // 狼刀生效
-    if (actualKill) {
-      const victim = game.players.find(p => p.playerId === actualKill);
-      if (victim && victim.alive) {
-        victim.alive = false;
-        victim.outReason = 'wolfKill';
-        deaths.push(victim.playerId);
-      }
-    }
-
-    // 女巫毒人
-    if (witchAction === 'poison' && witchTarget) {
-      const victim = game.players.find(p => p.playerId === witchTarget);
-      if (victim && victim.alive) {
-        victim.alive = false;
-        victim.outReason = 'poison';
-        deaths.push(victim.playerId);
-        const witch = game.players.find(p => p.role === '女巫');
-        if (witch) {
-          witch.abilities.poison = false;
-        }
-      }
-    }
-
-    // 记录结算日志
-    const log: ActionLog = {
-      id: uuidv4(),
-      timestamp: new Date().toISOString(),
-      round: game.currentRound,
-      phase: 'settle',
-      actorId: 'system',
-      actorPlayerId: 0,
-      action: 'settle',
-      result: deaths.length > 0 ? `昨晚死亡：${deaths.join('号、')}号` : '昨晚平安夜',
-      visible: 'all',
+    return {
+      success: true,
+      nextPhase: result.phase as GamePhase,
+      prompt: result.prompt || '进入下一阶段',
     };
-
-    game.history.push(log);
-
-    // 清空夜间操作
-    game.nightActions = {};
-  }
-
-  private checkWinner(game: Game): 'wolf' | 'good' | null {
-    const aliveWolves = game.players.filter(p => p.alive && p.camp === 'wolf').length;
-    const aliveGoods = game.players.filter(p => p.alive && p.camp === 'good').length;
-
-    if (aliveWolves === 0) return 'good';
-    if (aliveWolves >= aliveGoods) return 'wolf';
-    return null;
   }
 
   listGames(): Game[] {
@@ -387,6 +263,152 @@ export class GameService {
     if (index === -1) return false;
 
     this.games.splice(index, 1);
+    await this.saveGames();
+    return true;
+  }
+
+  // ================= 警长竞选相关方法 =================
+
+  async startSheriffElection(gameId: string): Promise<boolean> {
+    const game = this.getGame(gameId);
+    if (!game) return false;
+
+    this.votingSystem.startSheriffElection(game);
+    await this.saveGames();
+    return true;
+  }
+
+  async sheriffSignup(gameId: string, playerId: number, runForSheriff: boolean): Promise<boolean> {
+    const game = this.getGame(gameId);
+    if (!game) return false;
+
+    const result = this.votingSystem.sheriffSignup(game, playerId, runForSheriff);
+    if (result) {
+      await this.saveGames();
+    }
+    return result;
+  }
+
+  async startSheriffCampaign(gameId: string): Promise<boolean> {
+    const game = this.getGame(gameId);
+    if (!game) return false;
+
+    const result = this.votingSystem.startSheriffCampaign(game);
+    await this.saveGames();
+    return result;
+  }
+
+  async sheriffWithdraw(gameId: string, playerId: number): Promise<boolean> {
+    const game = this.getGame(gameId);
+    if (!game) return false;
+
+    const result = this.votingSystem.sheriffWithdraw(game, playerId);
+    if (result) {
+      await this.saveGames();
+    }
+    return result;
+  }
+
+  async startSheriffVoting(gameId: string): Promise<boolean> {
+    const game = this.getGame(gameId);
+    if (!game) return false;
+
+    const result = this.votingSystem.startSheriffVoting(game);
+    if (result) {
+      await this.saveGames();
+    }
+    return result;
+  }
+
+  async voteForSheriff(gameId: string, voterId: number, candidateId: number | 'skip'): Promise<boolean> {
+    const game = this.getGame(gameId);
+    if (!game) return false;
+
+    const result = this.votingSystem.voteForSheriff(game, voterId, candidateId);
+    if (result) {
+      await this.saveGames();
+    }
+    return result;
+  }
+
+  async tallySheriffVotes(gameId: string): Promise<number | null> {
+    const game = this.getGame(gameId);
+    if (!game) return null;
+
+    const winner = this.votingSystem.tallySheriffVotes(game);
+    if (winner) {
+      await this.saveGames();
+    }
+    return winner;
+  }
+
+  // ================= 放逐投票相关方法 =================
+
+  async startExileVote(gameId: string): Promise<boolean> {
+    const game = this.getGame(gameId);
+    if (!game) return false;
+
+    this.votingSystem.startExileVote(game);
+    await this.saveGames();
+    return true;
+  }
+
+  async voteForExile(gameId: string, voterId: number, targetId: number | 'skip'): Promise<boolean> {
+    const game = this.getGame(gameId);
+    if (!game) return false;
+
+    const result = this.votingSystem.voteForExile(game, voterId, targetId);
+    if (result) {
+      await this.saveGames();
+    }
+    return result;
+  }
+
+  async tallyExileVotes(gameId: string): Promise<{ result: number | 'tie' | 'none'; pkPlayers?: number[] }> {
+    const game = this.getGame(gameId);
+    if (!game) return { result: 'none' };
+
+    const result = this.votingSystem.tallyExileVotes(game);
+    await this.saveGames();
+    return result;
+  }
+
+  async startExilePKVote(gameId: string): Promise<boolean> {
+    const game = this.getGame(gameId);
+    if (!game) return false;
+
+    const result = this.votingSystem.startExilePKVote(game);
+    if (result) {
+      await this.saveGames();
+    }
+    return result;
+  }
+
+  async voteForExilePK(gameId: string, voterId: number, targetId: number | 'skip'): Promise<boolean> {
+    const game = this.getGame(gameId);
+    if (!game) return false;
+
+    const result = this.votingSystem.voteForExilePK(game, voterId, targetId);
+    if (result) {
+      await this.saveGames();
+    }
+    return result;
+  }
+
+  async tallyExilePKVotes(gameId: string): Promise<number | 'none'> {
+    const game = this.getGame(gameId);
+    if (!game) return 'none';
+
+    const result = this.votingSystem.tallyExilePKVotes(game);
+    await this.saveGames();
+    return result;
+  }
+
+  async executeExile(gameId: string, playerId: number): Promise<boolean> {
+    const game = this.getGame(gameId);
+    if (!game) return false;
+
+    this.votingSystem.executeExile(game, playerId);
     await this.saveGames();
     return true;
   }

@@ -1,9 +1,17 @@
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useMemo } from 'react';
 import { useAuthStore } from '../stores/authStore';
 import { useGameStore } from '../stores/gameStore';
 import { wsService } from '../services/websocket';
 import { Script, ServerMessage } from '../../../shared/src/types';
 import { ROLES } from '../../../shared/src/constants';
+import { config } from '../config';
+import {
+  calculateGameOverview,
+  calculatePlayerStats,
+  extractNightActionsSummary,
+  getRoleStatusText
+} from '../utils/gameStats';
+import { getPhaseLabel, translateDeathReason, getRoleName } from '../utils/phaseLabels';
 
 export default function GodConsole() {
   const { user, token, clearAuth } = useAuthStore();
@@ -13,6 +21,7 @@ export default function GodConsole() {
   const [roomCode, setRoomCode] = useState('');
   const [showRoleAssignment, setShowRoleAssignment] = useState(false);
   const [roleAssignments, setRoleAssignments] = useState<{ [key: number]: string }>({});
+  const [expandedRounds, setExpandedRounds] = useState<Set<number>>(new Set([1])); // 默认展开第1轮
 
   useEffect(() => {
     loadScripts();
@@ -30,6 +39,11 @@ export default function GodConsole() {
           break;
         case 'PLAYER_JOINED':
           console.log('Player joined:', message.player);
+          if (currentGame) {
+            const updatedGame = { ...currentGame };
+            updatedGame.players = [...updatedGame.players, message.player];
+            setGame(updatedGame);
+          }
           break;
         case 'PHASE_CHANGED':
           console.log('Phase changed:', message.phase);
@@ -38,11 +52,11 @@ export default function GodConsole() {
     });
 
     return unsubscribe;
-  }, []);
+  }, [currentGame, setGame]);
 
   const loadScripts = async () => {
     try {
-      const response = await fetch('http://localhost:3001/api/scripts');
+      const response = await fetch(`${config.apiUrl}/scripts`);
       const data = await response.json();
       if (data.success) {
         setScripts(data.data.scripts);
@@ -130,6 +144,104 @@ export default function GodConsole() {
 
   const currentScript = scripts.find((s) => s.id === currentGame?.scriptId);
 
+  // 使用 useMemo 缓存统计数据计算
+  const gameOverview = useMemo(() => {
+    return currentGame ? calculateGameOverview(currentGame) : null;
+  }, [currentGame]);
+
+  const playerStats = useMemo(() => {
+    return currentGame ? calculatePlayerStats(currentGame) : [];
+  }, [currentGame]);
+
+  const nightActionsSummary = useMemo(() => {
+    return currentGame ? extractNightActionsSummary(currentGame) : {};
+  }, [currentGame]);
+
+  // 按回合和阶段分组历史记录
+  const groupHistoryByRounds = () => {
+    if (!currentGame) return [];
+
+    const rounds: { [key: number]: any[] } = {};
+    currentGame.history.forEach(log => {
+      if (!rounds[log.round]) {
+        rounds[log.round] = [];
+      }
+      rounds[log.round].push(log);
+    });
+
+    return Object.entries(rounds).map(([round, logs]) => ({
+      round: Number(round),
+      logs,
+    })).sort((a, b) => b.round - a.round); // 最新的在前
+  };
+
+  const toggleRound = (round: number) => {
+    const newExpanded = new Set(expandedRounds);
+    if (newExpanded.has(round)) {
+      newExpanded.delete(round);
+    } else {
+      newExpanded.add(round);
+    }
+    setExpandedRounds(newExpanded);
+  };
+
+  // 导出复盘数据
+  const handleExportReplay = () => {
+    if (!currentGame) return;
+
+    const replayData = {
+      游戏信息: {
+        房间码: currentGame.roomCode,
+        剧本: currentGame.scriptName,
+        主持人: currentGame.hostUsername,
+        游戏状态: currentGame.status === 'waiting' ? '等待中' :
+                  currentGame.status === 'running' ? '进行中' :
+                  currentGame.status === 'finished' ? '已结束' : '未知',
+        开始时间: currentGame.startedAt || '未开始',
+        结束时间: currentGame.finishedAt || '未结束',
+        获胜方: currentGame.winner === 'wolf' ? '狼人阵营' :
+                currentGame.winner === 'good' ? '好人阵营' : '未决出',
+      },
+      玩家角色信息: currentGame.players.map(p => ({
+        号位: `${p.playerId}号`,
+        玩家名: p.username,
+        角色: p.role || '未分配',
+        阵营: p.camp === 'wolf' ? '狼人' : '好人',
+        是否存活: p.alive ? '存活' : '已出局',
+        是否警长: p.isSheriff ? '是' : '否',
+        出局原因: p.outReason ?
+          (p.outReason === 'wolfKill' ? '被狼人刀杀' :
+           p.outReason === 'poison' ? '被女巫毒死' :
+           p.outReason === 'vote' ? '被投票放逐' :
+           p.outReason === 'dreamerKilled' ? '摄梦人殉职' : p.outReason) : '未出局',
+      })),
+      游戏流程: groupHistoryByRounds().reverse().map(({ round, logs }) => ({
+        回合: round === 0 ? '游戏准备' : `第${round}回合`,
+        操作记录: logs.map(log => ({
+          阶段: getPhaseLabel(log.phase).replace(/[🌙💤🐺🧪🔮⚖️🎖️🗳️🏹☀️⏳🏁]/g, '').trim(),
+          时间: new Date(log.timestamp).toLocaleString('zh-CN'),
+          操作者: log.actorPlayerId > 0 ? `${log.actorPlayerId}号` : '系统',
+          操作类型: log.action,
+          目标: log.target ? `${log.target}号` : '无',
+          结果: log.result,
+        })),
+      })),
+    };
+
+    const jsonString = JSON.stringify(replayData, null, 2);
+    const blob = new Blob([jsonString], { type: 'application/json;charset=utf-8' });
+    const url = URL.createObjectURL(blob);
+    const link = document.createElement('a');
+    link.href = url;
+    link.download = `狼人杀复盘_${currentGame.roomCode}_${new Date().toLocaleDateString('zh-CN').replace(/\//g, '-')}.json`;
+    document.body.appendChild(link);
+    link.click();
+    document.body.removeChild(link);
+    URL.revokeObjectURL(url);
+
+    alert('复盘数据已导出！');
+  };
+
   return (
     <div className="min-h-screen bg-gradient-to-br from-gray-900 via-blue-900 to-gray-900 p-8">
       <div className="max-w-7xl mx-auto">
@@ -203,6 +315,7 @@ export default function GodConsole() {
           </div>
         ) : (
           <div className="space-y-6">
+            {/* 游戏房间信息和操作按钮 */}
             <div className="bg-white/10 backdrop-blur-md rounded-2xl p-8 shadow-2xl border border-white/20">
               <div className="flex justify-between items-center mb-6">
                 <div>
@@ -239,141 +352,317 @@ export default function GodConsole() {
                       进入下一阶段
                     </button>
                   )}
+                  <button
+                    onClick={handleExportReplay}
+                    className="px-4 py-2 bg-green-600 hover:bg-green-700 text-white rounded-lg transition"
+                  >
+                    📥 导出复盘
+                  </button>
                 </div>
               </div>
+            </div>
 
-              <div className="grid grid-cols-4 gap-4">
-                {currentGame.players.map((player) => (
-                  <div
-                    key={player.playerId}
-                    className={`p-4 rounded-lg border-2 ${
-                      player.alive
-                        ? player.isSheriff
-                          ? 'bg-yellow-600/20 border-yellow-500'
-                          : 'bg-green-600/20 border-green-500'
-                        : 'bg-red-600/20 border-red-500'
-                    }`}
-                  >
-                    <div className="text-white font-bold mb-2">
-                      {player.playerId}号 {player.isSheriff && '🎖️'}
-                    </div>
-                    <div className="text-gray-300 text-sm">{player.username}</div>
-                    {player.role && (
-                      <div className="text-gray-300 text-sm mt-2">
-                        {player.role} ({player.camp === 'wolf' ? '狼' : '好人'})
-                      </div>
-                    )}
-                    {!player.alive && (
-                      <div className="text-red-400 text-sm mt-1">已出局</div>
-                    )}
+            {/* P0 Panel 1: 游戏概览统计 */}
+            {gameOverview && (
+              <div className="bg-white/10 backdrop-blur-md rounded-2xl p-8 shadow-2xl border border-white/20">
+                <h3 className="text-2xl font-bold text-white mb-6">📊 游戏概览</h3>
+                <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
+                  {/* 当前回合 */}
+                  <div className="p-4 bg-blue-600/20 border border-blue-500/50 rounded-lg">
+                    <div className="text-blue-300 text-sm mb-1">当前回合</div>
+                    <div className="text-3xl font-bold text-white">第 {gameOverview.currentRound} 轮</div>
+                    <div className="text-gray-300 text-sm mt-1">{getPhaseLabel(gameOverview.currentPhase)}</div>
                   </div>
-                ))}
+
+                  {/* 存活狼人 */}
+                  <div className="p-4 bg-red-600/20 border border-red-500/50 rounded-lg">
+                    <div className="text-red-300 text-sm mb-1">存活狼人</div>
+                    <div className="text-3xl font-bold text-white">{gameOverview.aliveWolves} 人</div>
+                    <div className="text-gray-300 text-sm mt-1">已出局 {gameOverview.deadWolves} 人</div>
+                  </div>
+
+                  {/* 存活好人 */}
+                  <div className="p-4 bg-green-600/20 border border-green-500/50 rounded-lg">
+                    <div className="text-green-300 text-sm mb-1">存活好人</div>
+                    <div className="text-3xl font-bold text-white">{gameOverview.aliveGoods} 人</div>
+                    <div className="text-gray-300 text-sm mt-1">已出局 {gameOverview.deadGoods} 人</div>
+                  </div>
+
+                  {/* 游戏时长 */}
+                  <div className="p-4 bg-purple-600/20 border border-purple-500/50 rounded-lg">
+                    <div className="text-purple-300 text-sm mb-1">游戏时长</div>
+                    <div className="text-3xl font-bold text-white">
+                      {gameOverview.duration || '-'}
+                    </div>
+                    <div className="text-gray-300 text-sm mt-1">
+                      {gameOverview.winner === 'wolf' && '🐺 狼人胜利'}
+                      {gameOverview.winner === 'good' && '👥 好人胜利'}
+                      {!gameOverview.winner && '游戏进行中'}
+                    </div>
+                  </div>
+                </div>
+              </div>
+            )}
+
+            {/* P0 Panel 2: 玩家状态表格 */}
+            <div className="bg-white/10 backdrop-blur-md rounded-2xl p-8 shadow-2xl border border-white/20">
+              <h3 className="text-2xl font-bold text-white mb-6">👥 玩家状态</h3>
+              <div className="overflow-x-auto">
+                <table className="w-full text-left">
+                  <thead>
+                    <tr className="border-b border-white/20">
+                      <th className="pb-3 text-gray-300 font-semibold">号位</th>
+                      <th className="pb-3 text-gray-300 font-semibold">玩家名</th>
+                      <th className="pb-3 text-gray-300 font-semibold">角色</th>
+                      <th className="pb-3 text-gray-300 font-semibold">阵营</th>
+                      <th className="pb-3 text-gray-300 font-semibold">状态</th>
+                      <th className="pb-3 text-gray-300 font-semibold">技能次数</th>
+                      <th className="pb-3 text-gray-300 font-semibold">出局信息</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {playerStats.map((player) => (
+                      <tr
+                        key={player.playerId}
+                        className={`border-b border-white/10 ${
+                          !player.alive ? 'opacity-60' : ''
+                        }`}
+                      >
+                        <td className="py-3 text-white font-bold">
+                          {player.playerId}号
+                          {player.isSheriff && ' 🎖️'}
+                        </td>
+                        <td className="py-3 text-gray-300">{player.username}</td>
+                        <td className="py-3">
+                          <span
+                            className={`px-2 py-1 rounded text-sm ${
+                              player.camp === 'wolf'
+                                ? 'bg-red-600/30 text-red-300'
+                                : 'bg-blue-600/30 text-blue-300'
+                            }`}
+                          >
+                            {player.roleName}
+                          </span>
+                        </td>
+                        <td className="py-3">
+                          <span
+                            className={`px-2 py-1 rounded text-sm font-bold ${
+                              player.camp === 'wolf'
+                                ? 'bg-red-600/50 text-red-200'
+                                : 'bg-green-600/50 text-green-200'
+                            }`}
+                          >
+                            {player.camp === 'wolf' ? '狼人' : '好人'}
+                          </span>
+                        </td>
+                        <td className="py-3">
+                          <span
+                            className={`px-2 py-1 rounded text-sm ${
+                              player.alive
+                                ? 'bg-green-600/30 text-green-300'
+                                : 'bg-gray-600/30 text-gray-400'
+                            }`}
+                          >
+                            {player.alive ? '✓ 存活' : '✗ 已出局'}
+                          </span>
+                        </td>
+                        <td className="py-3 text-gray-300">{player.actionCount} 次</td>
+                        <td className="py-3 text-gray-300">
+                          {!player.alive && player.outReasonText && (
+                            <div className="text-sm">
+                              <div>{player.outReasonText}</div>
+                              {player.deathRound && (
+                                <div className="text-gray-500 text-xs">
+                                  第 {player.deathRound} 回合
+                                </div>
+                              )}
+                            </div>
+                          )}
+                          {player.alive && '-'}
+                        </td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
               </div>
             </div>
 
             {currentGame.status === 'running' && (
               <>
-                {/* 当前阶段操作状态 */}
+                {/* P0 Panel 3: 实时操作状态 */}
                 <div className="bg-white/10 backdrop-blur-md rounded-2xl p-8 shadow-2xl border border-white/20">
-                  <h3 className="text-xl font-bold text-white mb-4">
-                    当前阶段: {currentGame.currentPhase} | 回合: {currentGame.currentRound}
+                  <h3 className="text-2xl font-bold text-white mb-4">
+                    🎮 当前阶段: {getPhaseLabel(currentGame.currentPhase)} | 第 {currentGame.currentRound} 回合
                   </h3>
 
-                  {/* 实时操作状态 */}
-                  <div className="grid grid-cols-2 gap-4 mb-6">
+                  {/* 实时操作状态 - 使用 nightActionsSummary */}
+                  <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4 mb-6">
                     {/* 恐惧阶段 */}
-                    {currentGame.currentPhase === 'fear' && (
+                    {nightActionsSummary.fear && (
                       <div className="p-4 bg-purple-600/20 border border-purple-500/50 rounded-lg">
-                        <h4 className="text-white font-bold mb-2">🌙 恐惧阶段</h4>
+                        <h4 className="text-white font-bold mb-2">🌙 噩梦之影 ({nightActionsSummary.fear.actorId}号)</h4>
                         <div className="text-gray-300 text-sm">
-                          {currentGame.nightActions.fearSubmitted ? (
+                          {nightActionsSummary.fear.submitted ? (
                             <div className="text-green-400">
-                              ✅ 噩梦之影已选择: {currentGame.nightActions.fear ? `${currentGame.nightActions.fear}号` : '无目标'}
+                              ✅ 已选择: {nightActionsSummary.fear.targetId ? `${nightActionsSummary.fear.targetId}号` : '无目标'}
                             </div>
                           ) : (
-                            <div className="text-yellow-400">⏳ 等待噩梦之影操作...</div>
+                            <div className="text-yellow-400">⏳ 等待操作...</div>
                           )}
                         </div>
                       </div>
                     )}
 
-                    {/* 守护阶段 */}
-                    {currentGame.currentPhase === 'dream' && (
+                    {/* 摄梦人阶段 */}
+                    {nightActionsSummary.dream && (
                       <div className="p-4 bg-blue-600/20 border border-blue-500/50 rounded-lg">
-                        <h4 className="text-white font-bold mb-2">💤 守护阶段</h4>
+                        <h4 className="text-white font-bold mb-2">💤 摄梦人 ({nightActionsSummary.dream.actorId}号)</h4>
                         <div className="text-gray-300 text-sm">
-                          {currentGame.nightActions.dreamSubmitted ? (
+                          {nightActionsSummary.dream.submitted ? (
                             <div className="text-green-400">
-                              ✅ 摄梦人已守护: {currentGame.nightActions.dream ? `${currentGame.nightActions.dream}号` : '无目标'}
+                              ✅ 已摄梦: {nightActionsSummary.dream.targetId ? `${nightActionsSummary.dream.targetId}号` : '无目标'}
                             </div>
                           ) : (
-                            <div className="text-yellow-400">⏳ 等待摄梦人操作...</div>
+                            <div className="text-yellow-400">⏳ 等待操作...</div>
+                          )}
+                        </div>
+                      </div>
+                    )}
+
+                    {/* 石像鬼阶段 */}
+                    {nightActionsSummary.gargoyle && (
+                      <div className="p-4 bg-purple-600/20 border border-purple-500/50 rounded-lg">
+                        <h4 className="text-white font-bold mb-2">🗿 石像鬼 ({nightActionsSummary.gargoyle.actorId}号)</h4>
+                        <div className="text-gray-300 text-sm">
+                          {nightActionsSummary.gargoyle.submitted ? (
+                            <div className="text-green-400">
+                              ✅ 已查验: {nightActionsSummary.gargoyle.targetId ? `${nightActionsSummary.gargoyle.targetId}号` : '无目标'}
+                            </div>
+                          ) : (
+                            <div className="text-yellow-400">⏳ 等待操作...</div>
+                          )}
+                        </div>
+                      </div>
+                    )}
+
+                    {/* 守卫阶段 */}
+                    {nightActionsSummary.guard && (
+                      <div className="p-4 bg-blue-600/20 border border-blue-500/50 rounded-lg">
+                        <h4 className="text-white font-bold mb-2">🛡️ 守卫 ({nightActionsSummary.guard.actorId}号)</h4>
+                        <div className="text-gray-300 text-sm">
+                          {nightActionsSummary.guard.submitted ? (
+                            <div className="text-green-400">
+                              ✅ 已守护: {nightActionsSummary.guard.targetId ? `${nightActionsSummary.guard.targetId}号` : '无目标'}
+                            </div>
+                          ) : (
+                            <div className="text-yellow-400">⏳ 等待操作...</div>
                           )}
                         </div>
                       </div>
                     )}
 
                     {/* 狼人阶段 */}
-                    {currentGame.currentPhase === 'wolf' && (
+                    {nightActionsSummary.wolf && (
                       <div className="p-4 bg-red-600/20 border border-red-500/50 rounded-lg">
-                        <h4 className="text-white font-bold mb-2">🐺 狼人阶段</h4>
+                        <h4 className="text-white font-bold mb-2">🐺 狼人刀人</h4>
                         <div className="text-gray-300 text-sm">
-                          {currentGame.nightActions.wolfSubmitted ? (
+                          {nightActionsSummary.wolf.submitted ? (
+                            <>
+                              <div className="text-green-400">
+                                ✅ 已刀: {nightActionsSummary.wolf.targetId ? `${nightActionsSummary.wolf.targetId}号` : '无目标'}
+                              </div>
+                              {nightActionsSummary.wolf.voters && nightActionsSummary.wolf.voters.length > 0 && (
+                                <div className="text-gray-400 text-xs mt-1">
+                                  投票: {nightActionsSummary.wolf.voters.join(', ')}号
+                                </div>
+                              )}
+                            </>
+                          ) : (
+                            <div className="text-yellow-400">⏳ 等待操作...</div>
+                          )}
+                        </div>
+                      </div>
+                    )}
+
+                    {/* 狼美人阶段 */}
+                    {nightActionsSummary.wolfBeauty && (
+                      <div className="p-4 bg-pink-600/20 border border-pink-500/50 rounded-lg">
+                        <h4 className="text-white font-bold mb-2">💃 狼美人 ({nightActionsSummary.wolfBeauty.actorId}号)</h4>
+                        <div className="text-gray-300 text-sm">
+                          {nightActionsSummary.wolfBeauty.submitted ? (
                             <div className="text-green-400">
-                              ✅ 狼人已刀: {currentGame.nightActions.wolfKill ? `${currentGame.nightActions.wolfKill}号` : '无目标'}
+                              ✅ 已魅惑: {nightActionsSummary.wolfBeauty.targetId ? `${nightActionsSummary.wolfBeauty.targetId}号` : '无目标'}
                             </div>
                           ) : (
-                            <div className="text-yellow-400">⏳ 等待狼人操作...</div>
+                            <div className="text-yellow-400">⏳ 等待操作...</div>
                           )}
                         </div>
                       </div>
                     )}
 
                     {/* 女巫阶段 */}
-                    {currentGame.currentPhase === 'witch' && (
+                    {nightActionsSummary.witch && (
                       <div className="p-4 bg-green-600/20 border border-green-500/50 rounded-lg">
-                        <h4 className="text-white font-bold mb-2">🧪 女巫阶段</h4>
+                        <h4 className="text-white font-bold mb-2">🧪 女巫 ({nightActionsSummary.witch.actorId}号)</h4>
                         <div className="text-gray-300 text-sm space-y-1">
-                          <div>昨晚被刀: {currentGame.nightActions.witchKnowsVictim ? `${currentGame.nightActions.witchKnowsVictim}号` : '未知'}</div>
-                          {currentGame.nightActions.witchSubmitted ? (
+                          {nightActionsSummary.witch.victimId && (
+                            <div className="text-red-300">昨晚被刀: {nightActionsSummary.witch.victimId}号</div>
+                          )}
+                          {nightActionsSummary.witch.submitted ? (
                             <>
-                              <div className="text-green-400">✅ 女巫已操作</div>
-                              {currentGame.nightActions.witchAction === 'save' && (
+                              <div className="text-green-400">✅ 已操作</div>
+                              {nightActionsSummary.witch.action === 'save' && (
                                 <div className="text-blue-400">使用了解药</div>
                               )}
-                              {currentGame.nightActions.witchAction === 'poison' && (
-                                <div className="text-red-400">使用了毒药毒死 {currentGame.nightActions.witchTarget}号</div>
+                              {nightActionsSummary.witch.action === 'poison' && (
+                                <div className="text-red-400">使用了毒药毒死 {nightActionsSummary.witch.targetId}号</div>
                               )}
-                              {currentGame.nightActions.witchAction === 'none' && (
+                              {nightActionsSummary.witch.action === 'none' && (
                                 <div className="text-gray-400">不使用药水</div>
                               )}
                             </>
                           ) : (
-                            <div className="text-yellow-400">⏳ 等待女巫操作...</div>
+                            <div className="text-yellow-400">⏳ 等待操作...</div>
                           )}
                         </div>
                       </div>
                     )}
 
                     {/* 预言家阶段 */}
-                    {currentGame.currentPhase === 'seer' && (
+                    {nightActionsSummary.seer && (
                       <div className="p-4 bg-cyan-600/20 border border-cyan-500/50 rounded-lg">
-                        <h4 className="text-white font-bold mb-2">🔮 预言家阶段</h4>
+                        <h4 className="text-white font-bold mb-2">🔮 预言家 ({nightActionsSummary.seer.actorId}号)</h4>
                         <div className="text-gray-300 text-sm">
-                          {currentGame.nightActions.seerSubmitted ? (
+                          {nightActionsSummary.seer.submitted ? (
                             <>
-                              <div className="text-green-400">✅ 预言家已查验</div>
-                              {currentGame.nightActions.seerCheck && (
+                              <div className="text-green-400">✅ 已查验</div>
+                              {nightActionsSummary.seer.targetId && (
                                 <div>
-                                  查验 {currentGame.nightActions.seerCheck}号 →{' '}
-                                  <span className={currentGame.nightActions.seerResult === 'wolf' ? 'text-red-400' : 'text-blue-400'}>
-                                    {currentGame.nightActions.seerResult === 'wolf' ? '狼人' : '好人'}
+                                  查验 {nightActionsSummary.seer.targetId}号 →{' '}
+                                  <span className={nightActionsSummary.seer.result === 'wolf' ? 'text-red-400' : 'text-blue-400'}>
+                                    {nightActionsSummary.seer.result === 'wolf' ? '狼人' : '好人'}
                                   </span>
                                 </div>
                               )}
                             </>
                           ) : (
-                            <div className="text-yellow-400">⏳ 等待预言家操作...</div>
+                            <div className="text-yellow-400">⏳ 等待操作...</div>
+                          )}
+                        </div>
+                      </div>
+                    )}
+
+                    {/* 守墓人阶段 */}
+                    {nightActionsSummary.gravekeeper && (
+                      <div className="p-4 bg-gray-600/20 border border-gray-500/50 rounded-lg">
+                        <h4 className="text-white font-bold mb-2">⚰️ 守墓人 ({nightActionsSummary.gravekeeper.actorId}号)</h4>
+                        <div className="text-gray-300 text-sm">
+                          {nightActionsSummary.gravekeeper.submitted ? (
+                            <div className="text-green-400">
+                              ✅ 已验尸: {nightActionsSummary.gravekeeper.targetId ? `${nightActionsSummary.gravekeeper.targetId}号` : '无目标'}
+                            </div>
+                          ) : (
+                            <div className="text-yellow-400">⏳ 等待操作...</div>
                           )}
                         </div>
                       </div>
@@ -381,31 +670,66 @@ export default function GodConsole() {
                   </div>
 
                   {/* 神职技能状态 */}
-                  <div className="mb-6 p-4 bg-white/5 rounded-lg">
-                    <h4 className="text-white font-bold mb-2">🎭 神职技能状态</h4>
-                    <div className="grid grid-cols-2 gap-2 text-sm">
-                      {currentGame.players.filter(p => p.role === '女巫').map(witch => (
-                        <div key={witch.playerId} className="text-gray-300">
-                          {witch.playerId}号 女巫:
-                          <span className={witch.abilities.antidote ? 'text-green-400' : 'text-gray-500'}>
-                            {' '}解药{witch.abilities.antidote ? '✓' : '✗'}
-                          </span>
-                          <span className={witch.abilities.poison ? 'text-red-400' : 'text-gray-500'}>
-                            {' '}毒药{witch.abilities.poison ? '✓' : '✗'}
-                          </span>
-                        </div>
-                      ))}
+                  <div className="p-4 bg-white/5 rounded-lg">
+                    <h4 className="text-white font-bold mb-3">🎭 神职技能状态</h4>
+                    <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-3">
+                      {playerStats.map((player) => {
+                        const status = getRoleStatusText(currentGame.players.find(p => p.playerId === player.playerId)!);
+                        if (status === '正常' || !player.alive) return null;
+                        return (
+                          <div key={player.playerId} className="text-gray-300 text-sm p-2 bg-white/5 rounded">
+                            <span className="text-white font-semibold">{player.playerId}号 {player.roleName}:</span>
+                            <span className="ml-2">{status}</span>
+                          </div>
+                        );
+                      })}
                     </div>
                   </div>
 
-                  {/* 操作历史 */}
-                  <h4 className="text-white font-bold mb-2">📜 操作历史</h4>
-                  <div className="space-y-2 max-h-48 overflow-y-auto">
-                    {currentGame.history.slice(-10).reverse().map((log) => (
-                      <div key={log.id} className="text-gray-300 text-sm p-2 bg-white/5 rounded">
-                        [{log.phase}] {log.result}
+                  {/* 操作历史（按回合分组） */}
+                  <h4 className="text-white font-bold mb-2">📜 游戏流程历史</h4>
+                  <div className="space-y-2 max-h-96 overflow-y-auto">
+                    {groupHistoryByRounds().map(({ round, logs }) => (
+                      <div key={round} className="border border-white/20 rounded-lg overflow-hidden">
+                        {/* 回合标题 */}
+                        <button
+                          onClick={() => toggleRound(round)}
+                          className="w-full flex justify-between items-center p-3 bg-blue-600/20 hover:bg-blue-600/30 transition"
+                        >
+                          <span className="text-white font-bold">
+                            {round === 0 ? '游戏准备' : `第 ${round} 回合`}
+                          </span>
+                          <span className="text-gray-300 text-sm">
+                            {expandedRounds.has(round) ? '▼' : '▶'} {logs.length} 条记录
+                          </span>
+                        </button>
+
+                        {/* 回合详情 */}
+                        {expandedRounds.has(round) && (
+                          <div className="p-3 bg-white/5 space-y-2">
+                            {logs.map((log) => (
+                              <div
+                                key={log.id}
+                                className="text-sm p-2 bg-white/10 rounded border-l-4 border-blue-500"
+                              >
+                                <div className="flex justify-between items-start mb-1">
+                                  <span className="text-blue-300 font-medium">
+                                    {getPhaseLabel(log.phase)}
+                                  </span>
+                                  <span className="text-gray-400 text-xs">
+                                    {new Date(log.timestamp).toLocaleTimeString('zh-CN')}
+                                  </span>
+                                </div>
+                                <div className="text-gray-200">{log.result}</div>
+                              </div>
+                            ))}
+                          </div>
+                        )}
                       </div>
                     ))}
+                    {currentGame.history.length === 0 && (
+                      <div className="text-gray-400 text-center py-4">暂无历史记录</div>
+                    )}
                   </div>
                 </div>
               </>

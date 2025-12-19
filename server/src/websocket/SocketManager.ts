@@ -56,6 +56,18 @@ export class SocketManager {
         console.log(`Client disconnected: ${socket.id}`);
         const user = this.socketUsers.get(socket.id);
         if (user) {
+          // 检查用户是否在游戏中
+          const rooms = Array.from(socket.rooms);
+          for (const roomId of rooms) {
+            if (roomId === socket.id) continue;
+
+            const game = this.gameService.getGame(roomId);
+            if (game && game.status !== 'waiting') {
+              // 游戏进行中,玩家断线但数据保留,支持重连
+              console.log(`Player ${user.username} disconnected from active game ${game.id}, data preserved for reconnection`);
+            }
+          }
+
           this.userSockets.delete(user.userId);
           this.socketUsers.delete(socket.id);
         }
@@ -101,8 +113,24 @@ export class SocketManager {
         await this.handlePlayerAction(socket, message.action, send);
         break;
 
-      case 'SHERIFF_ELECT':
-        await this.handleSheriffElect(socket, message.sheriffId, send);
+      case 'SHERIFF_SIGNUP':
+        await this.handleSheriffSignup(socket, message.runForSheriff, send);
+        break;
+
+      case 'SHERIFF_WITHDRAW':
+        await this.handleSheriffWithdraw(socket, send);
+        break;
+
+      case 'SHERIFF_VOTE':
+        await this.handleSheriffVote(socket, message.candidateId, send);
+        break;
+
+      case 'EXILE_VOTE':
+        await this.handleExileVote(socket, message.targetId, send);
+        break;
+
+      case 'EXILE_PK_VOTE':
+        await this.handleExilePKVote(socket, message.targetId, send);
         break;
 
       default:
@@ -154,15 +182,26 @@ export class SocketManager {
     }
 
     if (user.role === 'player') {
-      const player = await this.gameService.addPlayer(game.id, user.userId, user.username);
-      if (!player) {
-        send({ type: 'ERROR', message: '加入房间失败' });
-        return;
-      }
+      // 检查玩家是否已经在游戏中(断线重连)
+      const existingPlayer = game.players.find(p => p.userId === user.userId);
 
-      socket.join(game.id);
-      send({ type: 'ROOM_JOINED', game });
-      this.io.to(game.id).emit('message', { type: 'PLAYER_JOINED', player } as ServerMessage);
+      if (existingPlayer) {
+        // 断线重连:玩家已在游戏中,恢复连接
+        socket.join(game.id);
+        send({ type: 'ROOM_JOINED', game });
+        console.log(`Player ${user.username} reconnected to game ${game.id}`);
+      } else {
+        // 新玩家加入
+        const player = await this.gameService.addPlayer(game.id, user.userId, user.username);
+        if (!player) {
+          send({ type: 'ERROR', message: '加入房间失败' });
+          return;
+        }
+
+        socket.join(game.id);
+        send({ type: 'ROOM_JOINED', game });
+        this.io.to(game.id).emit('message', { type: 'PLAYER_JOINED', player } as ServerMessage);
+      }
     } else if (user.role === 'god' && user.userId === game.hostId) {
       socket.join(game.id);
       send({ type: 'ROOM_JOINED', game });
@@ -183,8 +222,14 @@ export class SocketManager {
       if (game) {
         const player = game.players.find(p => p.userId === user.userId);
         if (player) {
-          await this.gameService.removePlayer(game.id, user.userId);
-          this.io.to(game.id).emit('message', { type: 'PLAYER_LEFT', playerId: player.playerId } as ServerMessage);
+          // 只在游戏还在等待状态时才真正删除玩家
+          // 游戏开始后,玩家断线不会被删除,支持重连
+          if (game.status === 'waiting') {
+            await this.gameService.removePlayer(game.id, user.userId);
+            this.io.to(game.id).emit('message', { type: 'PLAYER_LEFT', playerId: player.playerId } as ServerMessage);
+          } else {
+            console.log(`Player ${user.username} disconnected from game ${game.id}, but can reconnect`);
+          }
         }
         socket.leave(roomId);
       }
@@ -377,14 +422,16 @@ export class SocketManager {
     }
   }
 
-  private async handleSheriffElect(
+  // ================= 警长竞选处理 =================
+
+  private async handleSheriffSignup(
     socket: Socket,
-    sheriffId: number,
+    runForSheriff: boolean,
     send: (msg: ServerMessage) => void
   ) {
     const user = this.socketUsers.get(socket.id);
-    if (!user || user.role !== 'god') {
-      send({ type: 'ERROR', message: '需要上帝权限' });
+    if (!user) {
+      send({ type: 'ERROR', message: '需要先认证' });
       return;
     }
 
@@ -396,27 +443,216 @@ export class SocketManager {
     }
 
     const game = this.gameService.getGame(gameRoom);
-    if (!game || game.hostId !== user.userId) {
-      send({ type: 'ERROR', message: '权限不足' });
+    if (!game) {
+      send({ type: 'ERROR', message: '游戏不存在' });
       return;
     }
 
-    const player = game.players.find(p => p.playerId === sheriffId);
-    if (!player || !player.alive) {
-      send({ type: 'ERROR', message: '无效的警长候选人' });
+    const player = game.players.find(p => p.userId === user.userId);
+    if (!player) {
+      send({ type: 'ERROR', message: '玩家不存在' });
       return;
     }
 
-    game.players.forEach(p => (p.isSheriff = false));
-    player.isSheriff = true;
-    game.sheriffId = sheriffId;
-    game.sheriffElectionDone = true;
+    const success = await this.gameService.sheriffSignup(game.id, player.playerId, runForSheriff);
+    if (success) {
+      const updatedGame = this.gameService.getGame(game.id);
+      if (updatedGame) {
+        this.io.to(game.id).emit('message', { type: 'GAME_STATE_UPDATE', game: updatedGame } as ServerMessage);
+        if (updatedGame.sheriffElection) {
+          this.io.to(game.id).emit('message', {
+            type: 'SHERIFF_ELECTION_UPDATE',
+            state: updatedGame.sheriffElection
+          } as ServerMessage);
+        }
+      }
+      send({ type: 'ACTION_RESULT', success: true, message: runForSheriff ? '上警成功' : '选择不上警' });
+    } else {
+      send({ type: 'ERROR', message: '上警失败' });
+    }
+  }
 
-    const updatedGame = this.gameService.getGame(game.id);
-    if (updatedGame) {
-      this.io.to(game.id).emit('message', { type: 'GAME_STATE_UPDATE', game: updatedGame } as ServerMessage);
+  private async handleSheriffWithdraw(
+    socket: Socket,
+    send: (msg: ServerMessage) => void
+  ) {
+    const user = this.socketUsers.get(socket.id);
+    if (!user) {
+      send({ type: 'ERROR', message: '需要先认证' });
+      return;
     }
 
-    send({ type: 'ACTION_RESULT', success: true, message: '警长选举完成' });
+    const rooms = Array.from(socket.rooms);
+    const gameRoom = rooms.find(r => r !== socket.id);
+    if (!gameRoom) {
+      send({ type: 'ERROR', message: '未加入房间' });
+      return;
+    }
+
+    const game = this.gameService.getGame(gameRoom);
+    if (!game) {
+      send({ type: 'ERROR', message: '游戏不存在' });
+      return;
+    }
+
+    const player = game.players.find(p => p.userId === user.userId);
+    if (!player) {
+      send({ type: 'ERROR', message: '玩家不存在' });
+      return;
+    }
+
+    const success = await this.gameService.sheriffWithdraw(game.id, player.playerId);
+    if (success) {
+      const updatedGame = this.gameService.getGame(game.id);
+      if (updatedGame) {
+        this.io.to(game.id).emit('message', { type: 'GAME_STATE_UPDATE', game: updatedGame } as ServerMessage);
+        if (updatedGame.sheriffElection) {
+          this.io.to(game.id).emit('message', {
+            type: 'SHERIFF_ELECTION_UPDATE',
+            state: updatedGame.sheriffElection
+          } as ServerMessage);
+        }
+      }
+      send({ type: 'ACTION_RESULT', success: true, message: '退水成功' });
+    } else {
+      send({ type: 'ERROR', message: '退水失败' });
+    }
+  }
+
+  private async handleSheriffVote(
+    socket: Socket,
+    candidateId: number | 'skip',
+    send: (msg: ServerMessage) => void
+  ) {
+    const user = this.socketUsers.get(socket.id);
+    if (!user) {
+      send({ type: 'ERROR', message: '需要先认证' });
+      return;
+    }
+
+    const rooms = Array.from(socket.rooms);
+    const gameRoom = rooms.find(r => r !== socket.id);
+    if (!gameRoom) {
+      send({ type: 'ERROR', message: '未加入房间' });
+      return;
+    }
+
+    const game = this.gameService.getGame(gameRoom);
+    if (!game) {
+      send({ type: 'ERROR', message: '游戏不存在' });
+      return;
+    }
+
+    const player = game.players.find(p => p.userId === user.userId);
+    if (!player) {
+      send({ type: 'ERROR', message: '玩家不存在' });
+      return;
+    }
+
+    const success = await this.gameService.voteForSheriff(game.id, player.playerId, candidateId);
+    if (success) {
+      const updatedGame = this.gameService.getGame(game.id);
+      if (updatedGame && updatedGame.sheriffElection) {
+        this.io.to(game.id).emit('message', {
+          type: 'SHERIFF_ELECTION_UPDATE',
+          state: updatedGame.sheriffElection
+        } as ServerMessage);
+      }
+      send({ type: 'ACTION_RESULT', success: true, message: '投票成功' });
+    } else {
+      send({ type: 'ERROR', message: '投票失败' });
+    }
+  }
+
+  // ================= 放逐投票处理 =================
+
+  private async handleExileVote(
+    socket: Socket,
+    targetId: number | 'skip',
+    send: (msg: ServerMessage) => void
+  ) {
+    const user = this.socketUsers.get(socket.id);
+    if (!user) {
+      send({ type: 'ERROR', message: '需要先认证' });
+      return;
+    }
+
+    const rooms = Array.from(socket.rooms);
+    const gameRoom = rooms.find(r => r !== socket.id);
+    if (!gameRoom) {
+      send({ type: 'ERROR', message: '未加入房间' });
+      return;
+    }
+
+    const game = this.gameService.getGame(gameRoom);
+    if (!game) {
+      send({ type: 'ERROR', message: '游戏不存在' });
+      return;
+    }
+
+    const player = game.players.find(p => p.userId === user.userId);
+    if (!player) {
+      send({ type: 'ERROR', message: '玩家不存在' });
+      return;
+    }
+
+    const success = await this.gameService.voteForExile(game.id, player.playerId, targetId);
+    if (success) {
+      const updatedGame = this.gameService.getGame(game.id);
+      if (updatedGame && updatedGame.exileVote) {
+        this.io.to(game.id).emit('message', {
+          type: 'EXILE_VOTE_UPDATE',
+          state: updatedGame.exileVote
+        } as ServerMessage);
+      }
+      send({ type: 'ACTION_RESULT', success: true, message: '投票成功' });
+    } else {
+      send({ type: 'ERROR', message: '投票失败' });
+    }
+  }
+
+  private async handleExilePKVote(
+    socket: Socket,
+    targetId: number | 'skip',
+    send: (msg: ServerMessage) => void
+  ) {
+    const user = this.socketUsers.get(socket.id);
+    if (!user) {
+      send({ type: 'ERROR', message: '需要先认证' });
+      return;
+    }
+
+    const rooms = Array.from(socket.rooms);
+    const gameRoom = rooms.find(r => r !== socket.id);
+    if (!gameRoom) {
+      send({ type: 'ERROR', message: '未加入房间' });
+      return;
+    }
+
+    const game = this.gameService.getGame(gameRoom);
+    if (!game) {
+      send({ type: 'ERROR', message: '游戏不存在' });
+      return;
+    }
+
+    const player = game.players.find(p => p.userId === user.userId);
+    if (!player) {
+      send({ type: 'ERROR', message: '玩家不存在' });
+      return;
+    }
+
+    const success = await this.gameService.voteForExilePK(game.id, player.playerId, targetId);
+    if (success) {
+      const updatedGame = this.gameService.getGame(game.id);
+      if (updatedGame && updatedGame.exileVote) {
+        this.io.to(game.id).emit('message', {
+          type: 'EXILE_VOTE_UPDATE',
+          state: updatedGame.exileVote
+        } as ServerMessage);
+      }
+      send({ type: 'ACTION_RESULT', success: true, message: 'PK投票成功' });
+    } else {
+      send({ type: 'ERROR', message: 'PK投票失败' });
+    }
   }
 }

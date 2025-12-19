@@ -270,7 +270,7 @@ export default function GodConsole() {
                       className="w-full px-4 py-2 bg-white/5 border border-white/20 rounded-lg text-white"
                     >
                       {scripts.map((script) => (
-                        <option key={script.id} value={script.id}>
+                        <option key={script.id} value={script.id} className="text-gray-900 bg-white">
                           {script.name} ({script.playerCount}人)
                         </option>
                       ))}
@@ -748,10 +748,13 @@ export default function GodConsole() {
 
               <div className="mb-4 p-4 bg-blue-600/20 border border-blue-500/50 rounded-lg">
                 <h4 className="text-white font-bold mb-2">剧本配置：{currentScript.name}</h4>
-                <div className="text-gray-300 text-sm space-y-1">
+                <div className="text-gray-200 text-sm space-y-1">
                   {currentScript.roles.map(role => (
-                    <div key={role.id}>
-                      {role.name} x{role.count} ({role.camp === 'wolf' ? '狼人' : '好人'})
+                    <div key={role.id} className="flex justify-between">
+                      <span>{role.name} x{role.count}</span>
+                      <span className={role.camp === 'wolf' ? 'text-red-300' : 'text-green-300'}>
+                        ({role.camp === 'wolf' ? '狼人' : '好人'})
+                      </span>
                     </div>
                   ))}
                 </div>
@@ -768,9 +771,9 @@ export default function GodConsole() {
                       }
                       className="flex-1 px-4 py-2 bg-white/5 border border-white/20 rounded-lg text-white"
                     >
-                      <option value="">选择角色</option>
+                      <option value="" className="text-gray-900 bg-white">选择角色</option>
                       {currentScript.roles.map((role) => (
-                        <option key={role.id} value={role.id}>
+                        <option key={role.id} value={role.id} className="text-gray-900 bg-white">
                           {role.name} ({role.camp === 'wolf' ? '狼人' : '好人'})
                         </option>
                       ))}

@@ -199,8 +199,20 @@ export class SocketManager {
         }
 
         socket.join(game.id);
-        send({ type: 'ROOM_JOINED', game });
+
+        // 获取更新后的游戏状态
+        const updatedGame = this.gameService.getGame(game.id);
+        if (!updatedGame) {
+          send({ type: 'ERROR', message: '获取游戏状态失败' });
+          return;
+        }
+
+        // 向加入的玩家发送完整的游戏状态
+        send({ type: 'ROOM_JOINED', game: updatedGame });
+
+        // 向所有客户端广播玩家加入消息和更新的游戏状态
         this.io.to(game.id).emit('message', { type: 'PLAYER_JOINED', player } as ServerMessage);
+        this.io.to(game.id).emit('message', { type: 'GAME_STATE_UPDATE', game: updatedGame } as ServerMessage);
       }
     } else if (user.role === 'god' && user.userId === game.hostId) {
       socket.join(game.id);

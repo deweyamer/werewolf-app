@@ -4,6 +4,7 @@ import { useGameStore } from '../stores/gameStore';
 import { wsService } from '../services/websocket';
 import { Script, ServerMessage } from '../../../shared/src/types';
 import { ROLES } from '../../../shared/src/constants';
+import { config } from '../config';
 
 export default function GodConsole() {
   const { user, token, clearAuth } = useAuthStore();
@@ -42,7 +43,7 @@ export default function GodConsole() {
 
   const loadScripts = async () => {
     try {
-      const response = await fetch('http://localhost:3001/api/scripts');
+      const response = await fetch(`${config.apiUrl}/scripts`);
       const data = await response.json();
       if (data.success) {
         setScripts(data.data.scripts);

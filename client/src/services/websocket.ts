@@ -1,5 +1,6 @@
 import { io, Socket } from 'socket.io-client';
 import { ClientMessage, ServerMessage } from '../../../shared/src/types';
+import { config } from '../config';
 
 class WebSocketService {
   private socket: Socket | null = null;
@@ -10,7 +11,7 @@ class WebSocketService {
       return;
     }
 
-    this.socket = io('http://localhost:3001', {
+    this.socket = io(config.wsUrl, {
       transports: ['websocket'],
     });
 

@@ -4,6 +4,7 @@ import {
   SkillEffectType,
   SkillPriority,
   SkillTiming,
+  DeathReason,
 } from '../skill/SkillTypes.js';
 
 /**
@@ -22,15 +23,6 @@ export class GravekeeperHandler extends BaseRoleHandler {
   async handleNightAction(game: Game, action: PlayerAction): Promise<RoleActionResult> {
     const target = action.target;
 
-    // 获取最近死亡的玩家
-    const recentDeaths = game.players.filter(p => !p.alive);
-    if (recentDeaths.length === 0) {
-      return {
-        success: true,
-        message: '当前没有死者可以验尸',
-      };
-    }
-
     if (!target) {
       return { success: false, message: '必须选择验尸目标' };
     }
@@ -43,6 +35,25 @@ export class GravekeeperHandler extends BaseRoleHandler {
 
     if (targetPlayer.alive) {
       return { success: false, message: '只能验尸已死亡的玩家' };
+    }
+
+    // 守墓人只能验尸白天投票出局的玩家，不能验尸夜晚死亡或自爆的玩家
+    if (targetPlayer.outReason !== DeathReason.EXILE) {
+      return {
+        success: false,
+        message: '守墓人只能验尸白天投票出局的玩家'
+      };
+    }
+
+    // 获取可验尸的玩家列表（只有投票出局的）
+    const exiledPlayers = game.players.filter(
+      p => !p.alive && p.outReason === DeathReason.EXILE
+    );
+    if (exiledPlayers.length === 0) {
+      return {
+        success: false,
+        message: '当前没有可验尸的玩家（只能验尸投票出局者）',
+      };
     }
 
     // 创建验尸技能效果（类似查验）
@@ -73,9 +84,9 @@ export class GravekeeperHandler extends BaseRoleHandler {
   }
 
   getValidTargets(game: Game, playerId: number): number[] {
-    // 所有已死亡的玩家
+    // 只有白天投票出局的玩家可以被验尸
     return game.players
-      .filter(p => !p.alive)
+      .filter(p => !p.alive && p.outReason === DeathReason.EXILE)
       .map(p => p.playerId);
   }
 

@@ -31,8 +31,13 @@ export class GuardHandler extends BaseRoleHandler {
       return { success: false, message: '必须选择守护目标' };
     }
 
-    if (!this.isValidTarget(game, target)) {
-      return { success: false, message: '目标无效' };
+    // 检查目标是否存在且存活
+    const targetPlayer = game.players.find(p => p.playerId === target);
+    if (!targetPlayer) {
+      return { success: false, message: '目标不存在' };
+    }
+    if (!targetPlayer.alive) {
+      return { success: false, message: '目标已死亡' };
     }
 
     // 检查是否连续守护同一人

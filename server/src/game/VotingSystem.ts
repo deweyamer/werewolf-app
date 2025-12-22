@@ -394,7 +394,7 @@ export class VotingSystem {
     const player = game.players.find(p => p.playerId === playerId);
     if (player && player.alive) {
       player.alive = false;
-      player.outReason = 'vote';
+      player.outReason = 'exile';
     }
   }
 }

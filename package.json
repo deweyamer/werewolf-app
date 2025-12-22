@@ -14,7 +14,11 @@
     "dev": "concurrently \"npm run dev:server\" \"npm run dev:client\"",
     "build:client": "npm run build --workspace=client",
     "build:server": "npm run build --workspace=server",
-    "build": "npm run build:server && npm run build:client"
+    "build": "npm run build:server && npm run build:client",
+    "test:e2e": "npm run test:e2e --workspace=server",
+    "test:e2e:smoke": "npm run test:e2e:smoke --workspace=server",
+    "test:e2e:critical": "npm run test:e2e:critical --workspace=server",
+    "test:e2e:important": "npm run test:e2e:important --workspace=server"
   },
   "devDependencies": {
     "concurrently": "^8.2.2"

@@ -1,8 +1,9 @@
 import { v4 as uuidv4 } from 'uuid';
 import { Game, GamePhase, PlayerAction, ActionLog } from '../../../../shared/src/types.js';
 import { SkillResolver } from '../skill/SkillResolver.js';
-import { PhaseResult, ActionResult } from '../skill/SkillTypes.js';
+import { PhaseResult, ActionResult, SkillEffectType, SkillPriority, SkillTiming, DeathReason } from '../skill/SkillTypes.js';
 import { RoleRegistry } from '../roles/RoleRegistry.js';
+import { VotingSystem } from '../VotingSystem.js';
 
 /**
  * 游戏流程引擎
@@ -10,9 +11,11 @@ import { RoleRegistry } from '../roles/RoleRegistry.js';
  */
 export class GameFlowEngine {
   private skillResolver: SkillResolver;
+  private votingSystem: VotingSystem;
 
   constructor() {
     this.skillResolver = new SkillResolver();
+    this.votingSystem = new VotingSystem();
   }
 
   /**
@@ -37,6 +40,41 @@ export class GameFlowEngine {
       game.currentPhaseType = 'night';
       return { finished: false, phase: firstNightPhase.id, prompt: firstNightPhase.description };
     }
+
+    // 特殊处理：投票阶段结束，处理投票结果
+    if (currentPhaseConfig.id === 'vote' && nextPhaseConfig.id === 'daySettle') {
+      // 如果有投票数据，处理放逐
+      if (game.exileVote && Object.keys(game.exileVote.votes || {}).length > 0) {
+        console.log('[DEBUG] Processing votes:', game.exileVote.votes);
+        const tallyResult = this.votingSystem.tallyExileVotes(game);
+        console.log('[DEBUG] Tally result:', tallyResult);
+
+        // 如果有玩家被投票出局
+        if (typeof tallyResult.result === 'number') {
+          const exiledPlayerId = tallyResult.result;
+          console.log('[DEBUG] Creating exile effect for player:', exiledPlayerId);
+
+          // 创建放逐技能效果
+          const exileEffect = {
+            id: uuidv4(),
+            type: SkillEffectType.KILL,
+            priority: SkillPriority.EXILE_VOTE,
+            timing: SkillTiming.DAY_ACTION,
+            actorId: 0, // 系统
+            targetId: exiledPlayerId,
+            executed: false,
+            blocked: false,
+          };
+
+          // 添加到技能结算器
+          this.skillResolver.addEffect(exileEffect);
+          console.log('[DEBUG] Exile effect added to skill resolver');
+        }
+      } else {
+        console.log('[DEBUG] No exile votes found');
+      }
+    }
+    console.log('[DEBUG] After vote processing, effects in queue:', this.skillResolver['effectQueue']?.length || 0);
 
     // 特殊处理：夜间结算
     if (nextPhaseConfig.id === 'settle') {
@@ -64,10 +102,20 @@ export class GameFlowEngine {
 
     // 特殊处理：白天结算
     if (nextPhaseConfig.id === 'daySettle') {
+      console.log('[DEBUG] About to run day settlement, queue length:', this.skillResolver['effectQueue']?.length || 0);
+      console.log('[DEBUG] Running day settlement');
       const settleResult = await this.skillResolver.resolve(game, 'day');
+      console.log('[DEBUG] Day settlement result:', settleResult);
 
       // 记录结算日志
       this.recordSettleLog(game, settleResult.messages, settleResult.deaths);
+
+      // 清除恐惧状态（恐惧持续完整一个白天+夜晚回合，在白天结算后清除）
+      game.players.forEach(p => {
+        if (p.feared) {
+          p.feared = false;
+        }
+      });
 
       // 清空技能结算器
       this.skillResolver.clear();
@@ -112,6 +160,27 @@ export class GameFlowEngine {
     const player = game.players.find(p => p.playerId === action.playerId);
     if (!player || !player.alive) {
       return { success: false, message: '玩家不存在或已死亡' };
+    }
+
+    console.log(`[DEBUG] submitAction: phase=${game.currentPhase}, playerId=${action.playerId}, target=${action.target}`);
+
+    // 特殊处理：投票阶段
+    if (game.currentPhase === 'vote' && action.target !== undefined) {
+      console.log(`[DEBUG] Vote action received: player ${action.playerId} -> ${action.target}`);
+      // 初始化投票系统
+      if (!game.exileVote) {
+        console.log('[DEBUG] Initializing exile vote');
+        this.votingSystem.startExileVote(game);
+      }
+
+      // 提交投票
+      const voteResult = this.votingSystem.voteForExile(game, action.playerId, action.target);
+      console.log(`[DEBUG] Vote result: ${voteResult}, current votes:`, game.exileVote?.votes);
+      if (!voteResult) {
+        return { success: false, message: '投票失败' };
+      }
+
+      return { success: true, message: '投票成功' };
     }
 
     // 检查玩家是否被恐惧

@@ -3,6 +3,7 @@ import { Game } from '../../../../shared/src/types.js';
 import {
   SkillEffect,
   SkillEffectType,
+  SkillPriority,
   SkillTiming,
   PlayerState,
   DeathReason,
@@ -51,6 +52,7 @@ export class SkillResolver {
    * @returns 结算结果
    */
   async resolve(game: Game, phase: 'night' | 'day'): Promise<SettleResult> {
+    console.log(`[DEBUG] SkillResolver.resolve: phase=${phase}, queue length=${this.effectQueue.length}`);
     const result: SettleResult = {
       deaths: [],
       revives: [],
@@ -88,7 +90,7 @@ export class SkillResolver {
 
       // 检查目标状态（某些技能需要检查目标是否可被影响）
       if (this.requiresTargetCheck(effect.type)) {
-        if (!this.canTargetBeAffected(effect.targetId, effect.type)) {
+        if (!this.canTargetBeAffected(effect.targetId, effect.type, effect)) {
           effect.blocked = true;
           effect.blockReason = '目标免疫该效果';
           result.blocked.push(effect);
@@ -173,6 +175,9 @@ export class SkillResolver {
    * 检查施法者是否能行动
    */
   private canActorAct(actorId: number): boolean {
+    // 系统行动（actorId === 0）总是允许
+    if (actorId === 0) return true;
+
     const state = this.playerStates.get(actorId);
     if (!state) return false;
 
@@ -194,7 +199,7 @@ export class SkillResolver {
   /**
    * 检查目标是否能被影响
    */
-  private canTargetBeAffected(targetId: number, effectType: SkillEffectType): boolean {
+  private canTargetBeAffected(targetId: number, effectType: SkillEffectType, effect?: SkillEffect): boolean {
     const state = this.playerStates.get(targetId);
     if (!state) return false;
 
@@ -203,9 +208,11 @@ export class SkillResolver {
       return false;
     }
 
-    // 被守护或被摄梦人守护免疫狼刀
+    // 被守护或被摄梦人守护只能免疫狼刀，不能免疫毒药
     if (effectType === SkillEffectType.KILL) {
-      if (state.protected || state.dreamProtected) {
+      // 女巫毒药（优先级410）可以穿透守护
+      const isWitchPoison = effect?.priority === SkillPriority.WITCH_POISON;
+      if (!isWitchPoison && (state.protected || state.dreamProtected)) {
         return false;
       }
     }
@@ -257,8 +264,13 @@ export class SkillResolver {
     }
 
     const state = this.playerStates.get(effect.targetId)!;
-    state.willDie = true;
-    state.deathReason = this.getDeathReasonFromEffect(effect);
+
+    // 如果已经标记为将死亡，不要覆盖死亡原因
+    // 优先保留更早优先级的死因（如梦死不能被狼刀覆盖）
+    if (!state.willDie) {
+      state.willDie = true;
+      state.deathReason = this.getDeathReasonFromEffect(effect);
+    }
 
     return {
       success: true,
@@ -298,9 +310,9 @@ export class SkillResolver {
       return { success: false, message: '目标未处于死亡状态' };
     }
 
-    // 只能救狼刀
+    // 只能救狼刀，不能救梦死、毒药等其他死因
     if (state.deathReason !== DeathReason.WOLF_KILL) {
-      return { success: false, message: '只能救狼刀目标' };
+      return { success: false, message: '只能救狼刀目标，无法救梦死或其他死因' };
     }
 
     state.willDie = false;
@@ -495,10 +507,11 @@ export class SkillResolver {
     switch (effect.type) {
       case SkillEffectType.KILL:
         // 根据优先级判断
-        if (effect.priority === 300) return DeathReason.WOLF_KILL;
-        if (effect.priority === 410) return DeathReason.POISON;
-        if (effect.priority === 3000) return DeathReason.HUNTER_SHOOT;
-        if (effect.priority === 3100) return DeathReason.BLACK_WOLF_EXPLODE;
+        if (effect.priority === SkillPriority.WOLF_KILL) return DeathReason.WOLF_KILL;
+        if (effect.priority === SkillPriority.WITCH_POISON) return DeathReason.POISON;
+        if (effect.priority === SkillPriority.EXILE_VOTE) return DeathReason.EXILE;
+        if (effect.priority === SkillPriority.HUNTER_SHOOT) return DeathReason.HUNTER_SHOOT;
+        if (effect.priority === SkillPriority.BLACK_WOLF_EXPLOSION) return DeathReason.BLACK_WOLF_EXPLODE;
         return DeathReason.WOLF_KILL;
 
       case SkillEffectType.DREAM_KILL:

@@ -66,11 +66,23 @@ export function getPhaseColorClass(phase: string): string {
 
 /**
  * 翻译死亡原因
+ * 注意: 枚举值必须与后端 SkillTypes.ts 中的 DeathReason 枚举保持一致
  */
 export function translateDeathReason(reason?: string): string {
   const translations: { [key: string]: string } = {
-    'wolfKill': '🐺 被狼刀',
+    // 后端 DeathReason 枚举 (snake_case)
+    'wolf_kill': '🐺 被狼刀',
     'poison': '☠️ 被毒死',
+    'exile': '🗳️ 被投票放逐',
+    'hunter_shoot': '🏹 被猎人带走',
+    'dream_kill': '💤 摄梦人梦死',
+    'black_wolf_explode': '💥 黑狼自爆',
+    'knight_duel': '⚔️ 被骑士决斗',
+    'wolf_beauty_link': '💃 与狼美人殉情',
+    'self_destruct': '💣 狼人自爆',
+
+    // 兼容旧格式 (camelCase) - 逐步废弃
+    'wolfKill': '🐺 被狼刀',
     'vote': '🗳️ 被投票放逐',
     'dreamerKilled': '💤 摄梦人梦死',
     'hunter': '🏹 被猎人带走',

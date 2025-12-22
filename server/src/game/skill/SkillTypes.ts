@@ -115,12 +115,13 @@ export interface PlayerState {
 export enum DeathReason {
   WOLF_KILL = 'wolf_kill',           // 被狼刀
   POISON = 'poison',                 // 被毒
-  EXILE = 'exile',                   // 被放逐
+  EXILE = 'exile',                   // 被放逐（投票出局）
   HUNTER_SHOOT = 'hunter_shoot',     // 被猎人开枪
   DREAM_KILL = 'dream_kill',         // 被梦死
   BLACK_WOLF_EXPLODE = 'black_wolf_explode', // 黑狼王爆炸
   KNIGHT_DUEL = 'knight_duel',       // 骑士决斗
   WOLF_BEAUTY_LINK = 'wolf_beauty_link', // 狼美人连结死亡
+  SELF_DESTRUCT = 'self_destruct',   // 白狼王自爆
 }
 
 // ============================================

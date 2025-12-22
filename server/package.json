@@ -9,7 +9,11 @@
     "test": "vitest run",
     "test:watch": "vitest",
     "test:ui": "vitest --ui",
-    "test:coverage": "vitest run --coverage"
+    "test:coverage": "vitest run --coverage",
+    "test:e2e": "tsx src/test/runE2ETests.ts all",
+    "test:e2e:smoke": "tsx src/test/runE2ETests.ts smoke",
+    "test:e2e:critical": "tsx src/test/runE2ETests.ts critical",
+    "test:e2e:important": "tsx src/test/runE2ETests.ts important"
   },
   "dependencies": {
     "bcryptjs": "^2.4.3",

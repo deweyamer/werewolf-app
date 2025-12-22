@@ -331,6 +331,8 @@ export default function PlayerView() {
                       </div>
                       <div className="text-gray-300 text-sm">{player.username}</div>
                       {!player.alive && (
+                        // ⚠️ 安全警告: 禁止显示 outReason (player.outReason)
+                        // 显示出局原因会泄露关键游戏信息 (如"被狼刀"泄露狼人行为)
                         <div className="text-red-400 text-sm mt-1">已出局</div>
                       )}
                     </div>

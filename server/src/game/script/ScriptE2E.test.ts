@@ -350,19 +350,30 @@ describe('端到端游戏流程测试', () => {
       await submitAction(game.id, 1, 6);
       await gameService.advancePhase(game.id);
 
-      // 狼刀9号平民
+      // 狼刀10号平民（不刀9号，因为9号要被投票放逐）
       await advanceToPhase(game.id, 'wolf');
-      await submitAction(game.id, 2, 9);
+      await submitAction(game.id, 2, 10);
       await gameService.advancePhase(game.id);
 
-      // 推进到结算阶段，让9号真正死亡
+      // 推进到结算阶段，让10号死亡
       await advanceToPhase(game.id, 'settle');
       await gameService.advancePhase(game.id);
 
-      // 进入白天讨论和投票
+      // 进入白天讨论和投票，投票放逐9号
       await advanceToPhase(game.id, 'discussion');
       await gameService.advancePhase(game.id);
       await advanceToPhase(game.id, 'vote');
+
+      // 投票放逐9号平民（守墓人只能验尸投票出局的玩家）
+      await submitAction(game.id, 1, 9); // 石像鬼投9
+      await submitAction(game.id, 2, 9); // 狼投9
+      await submitAction(game.id, 3, 9); // 狼投9
+      await submitAction(game.id, 4, 9); // 狼投9
+      await submitAction(game.id, 5, 9); // 守墓人投9
+      await submitAction(game.id, 6, 9); // 预言家投9
+      await submitAction(game.id, 7, 9); // 女巫投9
+      await submitAction(game.id, 8, 9); // 猎人投9
+
       await gameService.advancePhase(game.id);
       await advanceToPhase(game.id, 'daySettle');
       await gameService.advancePhase(game.id);
@@ -370,7 +381,7 @@ describe('端到端游戏流程测试', () => {
       // 第二晚：守墓人验尸阶段
       await advanceToPhase(game.id, 'gravekeeper');
 
-      // 守墓人应该能查看昨晚死者的身份
+      // 守墓人应该能验尸9号（白天被投票放逐的玩家）
       const gravekeeperResult = await submitAction(game.id, 5, 9);
 
       expect(gravekeeperResult.success).toBe(true);

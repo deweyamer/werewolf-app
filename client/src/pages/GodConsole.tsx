@@ -702,6 +702,25 @@ export default function GodConsole() {
                       <div className="p-4 bg-gray-600/20 border border-gray-500/50 rounded-lg">
                         <h4 className="text-white font-bold mb-2">⚰️ 守墓人 ({nightActionsSummary.gravekeeper.actorId}号)</h4>
                         <div className="text-gray-300 text-sm">
+                          {/* 守墓人规则提示 */}
+                          <div className="text-yellow-400 text-xs mb-2">
+                            ⚠️ 守墓人只能验尸白天被投票放逐的玩家
+                          </div>
+                          {/* 显示可验尸的玩家列表 */}
+                          {(() => {
+                            const exiledPlayers = currentGame.players.filter(
+                              p => !p.alive && p.outReason === 'exile'
+                            );
+                            return exiledPlayers.length > 0 ? (
+                              <div className="text-gray-400 text-xs mb-2">
+                                可验尸: {exiledPlayers.map(p => `${p.playerId}号`).join(', ')}
+                              </div>
+                            ) : (
+                              <div className="text-gray-500 text-xs mb-2">
+                                可验尸: 无 (尚无被放逐的玩家)
+                              </div>
+                            );
+                          })()}
                           {nightActionsSummary.gravekeeper.submitted ? (
                             <div className="text-green-400">
                               ✅ 已验尸: {nightActionsSummary.gravekeeper.targetId ? `${nightActionsSummary.gravekeeper.targetId}号` : '无目标'}

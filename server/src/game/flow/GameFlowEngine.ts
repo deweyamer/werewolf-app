@@ -1,5 +1,6 @@
 import { v4 as uuidv4 } from 'uuid';
 import { Game, GamePhase, GamePlayer, PlayerAction, ActionLog } from '../../../../shared/src/types.js';
+import { ROLE_INFO } from '../../../../shared/src/constants.js';
 import { SkillResolver } from '../skill/SkillResolver.js';
 import { PhaseResult, ActionResult, SettleResult, SkillEffect, SkillEffectType, SkillPriority, SkillTiming, DeathReason } from '../skill/SkillTypes.js';
 import { RoleRegistry } from '../roles/RoleRegistry.js';
@@ -338,13 +339,25 @@ export class GameFlowEngine {
 
   /**
    * 检查胜利条件
+   * 好人胜利：所有狼人死亡
+   * 狼人胜利：所有神职死亡 或 所有平民死亡
    */
   private checkWinner(game: Game): 'wolf' | 'good' | null {
-    const aliveWolves = game.players.filter(p => p.alive && p.camp === 'wolf').length;
-    const aliveGoods = game.players.filter(p => p.alive && p.camp === 'good').length;
+    const alivePlayers = game.players.filter(p => p.alive);
+    const aliveWolves = alivePlayers.filter(p => p.camp === 'wolf').length;
 
+    // 好人胜利：所有狼人死亡
     if (aliveWolves === 0) return 'good';
-    if (aliveWolves >= aliveGoods) return 'wolf';
+
+    // 狼人胜利：所有神职死亡 或 所有平民死亡
+    const totalGods = game.players.filter(p => ROLE_INFO[p.role]?.type === 'god').length;
+    const totalCivilians = game.players.filter(p => ROLE_INFO[p.role]?.type === 'civilian').length;
+    const aliveGods = alivePlayers.filter(p => ROLE_INFO[p.role]?.type === 'god').length;
+    const aliveCivilians = alivePlayers.filter(p => ROLE_INFO[p.role]?.type === 'civilian').length;
+
+    if (totalGods > 0 && aliveGods === 0) return 'wolf';
+    if (totalCivilians > 0 && aliveCivilians === 0) return 'wolf';
+
     return null;
   }
 

@@ -410,6 +410,11 @@ export class SocketManager {
       return;
     }
 
+    // 如果有机器人，执行第一个阶段的机器人行动
+    if (game.hasBot) {
+      await this.gameService.executeBotActionsForCurrentPhase(game.id);
+    }
+
     const updatedGame = this.gameService.getGame(game.id);
     if (!updatedGame) return;
 
@@ -421,7 +426,7 @@ export class SocketManager {
     this.io.to(game.id).emit('message', {
       type: 'PHASE_CHANGED',
       phase: updatedGame.currentPhase,
-      prompt: '恐惧阶段：噩梦之影行动',
+      prompt: `${updatedGame.currentPhase}阶段`,
     } as ServerMessage);
   }
 

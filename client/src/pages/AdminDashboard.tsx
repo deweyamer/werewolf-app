@@ -1,4 +1,5 @@
 import { useState, useEffect } from 'react';
+import { Link } from 'react-router-dom';
 import { useAuthStore } from '../stores/authStore';
 import { wsService } from '../services/websocket';
 import { User } from '../../../shared/src/types';
@@ -190,6 +191,18 @@ export default function AdminDashboard() {
             </table>
           </div>
         </div>
+
+        {config.isDev && (
+          <div className="mt-8 bg-white/10 backdrop-blur-md rounded-2xl p-8 shadow-2xl border border-yellow-500/30">
+            <h2 className="text-2xl font-bold text-yellow-400 mb-4">开发工具</h2>
+            <Link
+              to="/dev/roles"
+              className="inline-block px-6 py-3 bg-yellow-600 hover:bg-yellow-700 text-white rounded-lg transition"
+            >
+              角色 UI 沙盒
+            </Link>
+          </div>
+        )}
       </div>
     </div>
   );

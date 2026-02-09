@@ -14,7 +14,8 @@
       "Bash(npx vitest:*)",
       "Bash(npx tsc:*)",
       "Bash(ls \"c:\\\\Users\\\\Dewey.Du\\\\VscodePythonProjects\\\\werewolf-app\\\\client\\\\src\\\\hooks\"\" 2>nul || echo \"Directory does not exist \")",
-      "Bash(wc:*)"
+      "Bash(wc:*)",
+      "Bash(npm run build:client:*)"
     ]
   }
 }

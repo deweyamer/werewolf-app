@@ -164,19 +164,14 @@ describe('GameFlowEngine', () => {
       expect(game.status).toBe('finished');
     });
 
-    it('狼人数量>=好人数量 → 狼人获胜', async () => {
+    it('所有神职死亡（民存活） → 狼人获胜', async () => {
       game.currentPhase = 'seer';
       game.nightActions = {} as any;
 
-      // Kill good players until wolves >= goods
-      // 4 wolves, need goods <= 4, so kill 4 of the 8 good players
-      let killCount = 0;
-      game.players.forEach(p => {
-        if (p.camp === 'good' && killCount < 4) {
-          p.alive = false;
-          p.outReason = 'wolf_kill';
-          killCount++;
-        }
+      // Kill all god-role players: seer(5), witch(6), hunter(7), guard(8)
+      [5, 6, 7, 8].forEach(id => {
+        const p = game.players.find(p => p.playerId === id);
+        if (p) { p.alive = false; p.outReason = 'wolf_kill'; }
       });
 
       const result = await engine.advancePhase(game, scriptPhases);
@@ -185,17 +180,48 @@ describe('GameFlowEngine', () => {
       expect(result.winner).toBe('wolf');
     });
 
-    it('双方都有存活玩家 → 游戏继续', async () => {
+    it('所有平民死亡（神职存活） → 狼人获胜', async () => {
+      game.currentPhase = 'seer';
+      game.nightActions = {} as any;
+
+      // Kill all villagers: 9, 10, 11, 12
+      [9, 10, 11, 12].forEach(id => {
+        const p = game.players.find(p => p.playerId === id);
+        if (p) { p.alive = false; p.outReason = 'wolf_kill'; }
+      });
+
+      const result = await engine.advancePhase(game, scriptPhases);
+
+      expect(result.finished).toBe(true);
+      expect(result.winner).toBe('wolf');
+    });
+
+    it('双方都有存活玩家（神民均有存活） → 游戏继续', async () => {
       game.currentPhase = 'seer';
       game.nightActions = {} as any;
       game.sheriffElectionDone = true; // Skip election
 
-      // Kill 1 good player (wolves=4, goods=7 → game continues)
+      // Kill 1 villager and 1 god — both categories still have survivors
       const villager = game.players.find(p => p.playerId === 9);
-      if (villager) {
-        villager.alive = false;
-        villager.outReason = 'wolf_kill';
-      }
+      if (villager) { villager.alive = false; villager.outReason = 'wolf_kill'; }
+      const seer = game.players.find(p => p.playerId === 5);
+      if (seer) { seer.alive = false; seer.outReason = 'wolf_kill'; }
+
+      const result = await engine.advancePhase(game, scriptPhases);
+
+      expect(result.finished).toBe(false);
+    });
+
+    it('部分神职死亡但民存活且有神职存活 → 游戏继续', async () => {
+      game.currentPhase = 'seer';
+      game.nightActions = {} as any;
+      game.sheriffElectionDone = true;
+
+      // Kill 3 of 4 god roles, all villagers alive
+      [5, 6, 7].forEach(id => {
+        const p = game.players.find(p => p.playerId === id);
+        if (p) { p.alive = false; p.outReason = 'wolf_kill'; }
+      });
 
       const result = await engine.advancePhase(game, scriptPhases);
 

@@ -170,7 +170,7 @@ export class BotService {
   /**
    * 守卫决策：随机守护一个玩家（不能连续守同一人）
    */
-  private guardDecision(player: GamePlayer, game: Game): PlayerAction {
+  private guardDecision(player: GamePlayer, game: Game): PlayerAction | null {
     const lastTarget = player.abilities?.lastGuardTarget;
     const targets = game.players.filter(p => {
       if (!p.alive) return false;
@@ -180,13 +180,17 @@ export class BotService {
     });
 
     const target = this.randomPick(targets);
-    console.log(`[Bot] 守卫(${player.playerId}号) 守护 ${target?.playerId || 0}号`);
+    if (!target) {
+      console.log(`[Bot] 守卫(${player.playerId}号) 无可用守护目标`);
+      return null;
+    }
+    console.log(`[Bot] 守卫(${player.playerId}号) 守护 ${target.playerId}号`);
 
     return {
       phase: 'guard',
       playerId: player.playerId,
       actionType: 'action',
-      target: target?.playerId || 0,
+      target: target.playerId,
     };
   }
 

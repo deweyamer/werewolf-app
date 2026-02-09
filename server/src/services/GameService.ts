@@ -548,6 +548,17 @@ export class GameService {
   // ================= 机器人行为相关 =================
 
   /**
+   * 执行机器人当前阶段的行动（用于游戏开始后的第一个阶段）
+   */
+  async executeBotActionsForCurrentPhase(gameId: string): Promise<void> {
+    const game = this.getGame(gameId);
+    if (!game || !game.hasBot || game.status !== 'running') return;
+
+    await this.botService.executeBotActionsForPhase(game, game.currentPhase as GamePhase);
+    await this.saveGames();
+  }
+
+  /**
    * 执行机器人警长竞选上警
    */
   async executeBotSheriffSignup(gameId: string): Promise<void> {

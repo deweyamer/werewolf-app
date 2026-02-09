@@ -80,6 +80,7 @@ export function translateDeathReason(reason?: string): string {
     'knight_duel': '⚔️ 被骑士决斗',
     'wolf_beauty_link': '💃 与狼美人殉情',
     'self_destruct': '💣 狼人自爆',
+    'guard_save_conflict': '💔 奶穿（同守同救）',
 
     // 兼容旧格式 (camelCase) - 逐步废弃
     'wolfKill': '🐺 被狼刀',
@@ -90,6 +91,39 @@ export function translateDeathReason(reason?: string): string {
     'wolfBeauty': '💃 与狼美人殉情',
   };
   return translations[reason || ''] || reason || '未知原因';
+}
+
+/**
+ * 阶段操作提示（告诉上帝当前步骤应该做什么）
+ */
+export const PHASE_HINTS: Record<string, string> = {
+  fear: '请让噩梦之影选择恐惧目标',
+  dream: '请让摄梦人选择梦游目标',
+  gargoyle: '请让石像鬼选择查验目标',
+  guard: '请让守卫选择守护目标',
+  wolf: '请等待狼人商议并选择刀人目标',
+  wolf_beauty: '请让狼美人选择魅惑目标',
+  witch: '请等待女巫决定是否用药',
+  seer: '请等待预言家查验',
+  gravekeeper: '请让守墓人选择验尸目标',
+  settle: '夜间结算完成，请宣布昨晚结果',
+  sheriffElection: '警长竞选阶段，请操作上警/发言/投票流程',
+  sheriffCampaign: '警长竞选发言中',
+  sheriffVote: '警长竞选投票中',
+  discussion: '白天讨论阶段，请主持发言顺序',
+  vote: '投票放逐阶段，请引导玩家投票',
+  daySettle: '白天结算中',
+  hunter: '猎人死亡，请等待猎人选择开枪目标',
+  knight: '骑士发起决斗',
+  lobby: '等待玩家加入',
+  finished: '游戏已结束',
+};
+
+/**
+ * 获取阶段操作提示
+ */
+export function getPhaseHint(phase: string): string {
+  return PHASE_HINTS[phase] || '';
 }
 
 /**

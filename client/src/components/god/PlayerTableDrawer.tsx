@@ -29,19 +29,86 @@ export default function PlayerTableDrawer({
         }`}
       >
         {/* 抽屉头部 */}
-        <div className="flex items-center justify-between p-6 border-b border-white/20">
-          <h2 className="text-2xl font-bold text-white">玩家详细状态</h2>
+        <div className="flex items-center justify-between px-4 py-3 sm:p-6 border-b border-white/20">
+          <h2 className="text-lg sm:text-2xl font-bold text-white">玩家详细状态</h2>
           <button
             onClick={onClose}
-            className="p-2 hover:bg-white/10 rounded-lg transition"
+            className="p-1.5 sm:p-2 hover:bg-white/10 rounded-lg transition"
           >
-            <X className="text-white" size={24} />
+            <X className="text-white" size={20} />
           </button>
         </div>
 
-        {/* 抽屉内容 - 完整表格 */}
-        <div className="p-6 overflow-y-auto h-[calc(100vh-80px)]">
-          <div className="overflow-x-auto">
+        {/* 抽屉内容 */}
+        <div className="px-3 py-3 sm:p-6 overflow-y-auto h-[calc(100vh-56px)] sm:h-[calc(100vh-80px)]">
+
+          {/* 移动端卡片布局 */}
+          <div className="sm:hidden space-y-2">
+            {playerStats.map((player) => (
+              <div
+                key={player.playerId}
+                className={`rounded-lg border border-white/10 p-3 ${
+                  !player.alive ? 'opacity-50 bg-white/[0.02]' : 'bg-white/5'
+                }`}
+              >
+                {/* 卡片头：号位 + 玩家名 + 状态 */}
+                <div className="flex items-center justify-between mb-2">
+                  <div className="flex items-center gap-2">
+                    <span className="text-white font-bold text-sm">
+                      {player.playerId}号
+                      {player.isSheriff && ' 🎖️'}
+                    </span>
+                    <span className="text-gray-400 text-xs">{player.username}</span>
+                  </div>
+                  <span
+                    className={`px-1.5 py-0.5 rounded text-[11px] ${
+                      player.alive
+                        ? 'bg-green-600/30 text-green-300'
+                        : 'bg-gray-600/30 text-gray-400'
+                    }`}
+                  >
+                    {player.alive ? '存活' : '已出局'}
+                  </span>
+                </div>
+                {/* 卡片体：角色 + 阵营 + 技能 */}
+                <div className="flex items-center gap-2 flex-wrap">
+                  <span
+                    className={`px-1.5 py-0.5 rounded text-[11px] ${
+                      player.camp === 'wolf'
+                        ? 'bg-red-600/30 text-red-300'
+                        : 'bg-blue-600/30 text-blue-300'
+                    }`}
+                  >
+                    {player.roleName}
+                  </span>
+                  {player.role && (
+                    <span
+                      className={`px-1.5 py-0.5 rounded text-[11px] font-medium ${
+                        player.camp === 'wolf'
+                          ? 'bg-red-600/50 text-red-200'
+                          : 'bg-green-600/50 text-green-200'
+                      }`}
+                    >
+                      {player.camp === 'wolf' ? '狼人' : '好人'}
+                    </span>
+                  )}
+                  <span className="text-[11px] text-gray-500">技能 {player.actionCount} 次</span>
+                </div>
+                {/* 出局信息 */}
+                {!player.alive && player.outReasonText && (
+                  <div className="mt-2 pt-2 border-t border-white/5 text-xs text-gray-400">
+                    {player.outReasonText}
+                    {player.deathRound && (
+                      <span className="text-gray-600 ml-2">第{player.deathRound}回合</span>
+                    )}
+                  </div>
+                )}
+              </div>
+            ))}
+          </div>
+
+          {/* 桌面端表格布局 */}
+          <div className="hidden sm:block overflow-x-auto">
             <table className="w-full text-left">
               <thead>
                 <tr className="border-b border-white/20">

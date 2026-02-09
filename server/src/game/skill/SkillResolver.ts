@@ -52,7 +52,6 @@ export class SkillResolver {
    * @returns 结算结果
    */
   async resolve(game: Game, phase: 'night' | 'day'): Promise<SettleResult> {
-    console.log(`[DEBUG] SkillResolver.resolve: phase=${phase}, queue length=${this.effectQueue.length}`);
     const result: SettleResult = {
       deaths: [],
       revives: [],
@@ -83,7 +82,7 @@ export class SkillResolver {
       // 检查施法者状态
       if (!this.canActorAct(effect.actorId)) {
         effect.blocked = true;
-        effect.blockReason = '施法者无法行动（被恐惧或石化）';
+        effect.blockReason = '施法者无法行动（被恐惧）';
         result.blocked.push(effect);
         continue;
       }
@@ -109,8 +108,18 @@ export class SkillResolver {
       this.updatePlayerStates(outcome);
     }
 
+    // 处理同守同救（奶穿）：守卫守护 + 女巫解药同时作用于被狼刀目标 → 目标死亡
+    if (phase === 'night') {
+      this.processGuardSaveConflict(game, result);
+    }
+
     // 处理连结死亡（狼美人）
     this.processLinkedDeaths(game, result);
+
+    // 处理摄梦人死亡连带（摄梦人夜间死亡 → 当晚梦游目标一同死亡）
+    if (phase === 'night') {
+      this.processDreamerDeathLinkage(game, result);
+    }
 
     // 应用死亡到游戏状态
     this.applyDeaths(game, result);
@@ -144,8 +153,8 @@ export class SkillResolver {
         poisoned: false,
         cannotAct: false,
         protected: false,
-        gargoyleProtected: false,
         dreamProtected: false,
+        savedByWitch: false,
         lastGuardTarget: player.abilities.lastGuardTarget,
         lastDreamTarget: player.abilities.lastDreamTarget,
         dreamKillReady: player.abilities.dreamKillReady,
@@ -181,8 +190,8 @@ export class SkillResolver {
     const state = this.playerStates.get(actorId);
     if (!state) return false;
 
-    // 被恐惧、被石化、无法行动
-    return !state.feared && !state.gargoyleProtected && !state.cannotAct;
+    // 被恐惧、无法行动
+    return !state.feared && !state.cannotAct;
   }
 
   /**
@@ -203,16 +212,16 @@ export class SkillResolver {
     const state = this.playerStates.get(targetId);
     if (!state) return false;
 
-    // 被石化免疫所有效果
-    if (state.gargoyleProtected) {
-      return false;
-    }
-
-    // 被守护或被摄梦人守护只能免疫狼刀，不能免疫毒药
     if (effectType === SkillEffectType.KILL) {
-      // 女巫毒药（优先级410）可以穿透守护
       const isWitchPoison = effect?.priority === SkillPriority.WITCH_POISON;
-      if (!isWitchPoison && (state.protected || state.dreamProtected)) {
+
+      // 摄梦人守护：免疫所有夜间伤害（包括狼刀和毒药）
+      if (state.dreamProtected) {
+        return false;
+      }
+
+      // 守卫守护：仅免疫狼刀，毒药可以穿透
+      if (state.protected && !isWitchPoison) {
         return false;
       }
     }
@@ -243,8 +252,8 @@ export class SkillResolver {
       case SkillEffectType.BLOCK:
         return this.executeBlock(game, effect);
 
-      case SkillEffectType.IMMUNE:
-        return this.executeImmune(game, effect);
+      case SkillEffectType.DREAM_PROTECT:
+        return this.executeDreamProtect(game, effect);
 
       case SkillEffectType.DREAM_KILL:
         return this.executeDreamKill(game, effect);
@@ -298,6 +307,24 @@ export class SkillResolver {
   }
 
   /**
+   * 执行摄梦人守护效果（免疫所有夜间伤害）
+   */
+  private executeDreamProtect(game: Game, effect: SkillEffect): EffectOutcome {
+    const state = this.playerStates.get(effect.targetId);
+    if (!state) {
+      return { success: false, message: '目标不存在' };
+    }
+
+    state.dreamProtected = true;
+
+    return {
+      success: true,
+      protected: effect.targetId,
+      message: `${effect.targetId}号受到摄梦人守护`,
+    };
+  }
+
+  /**
    * 执行救人效果（女巫解药）
    */
   private executeSave(game: Game, effect: SkillEffect): EffectOutcome {
@@ -306,7 +333,12 @@ export class SkillResolver {
       return { success: false, message: '目标不存在' };
     }
 
+    // 标记女巫对该目标使用了解药（用于同守同救判定）
+    state.savedByWitch = true;
+
     if (!state.willDie) {
+      // 目标未处于死亡状态（可能已被守卫挡刀）
+      // 仍然标记 savedByWitch，同守同救在后处理阶段判定
       return { success: false, message: '目标未处于死亡状态' };
     }
 
@@ -391,25 +423,6 @@ export class SkillResolver {
   }
 
   /**
-   * 执行免疫效果（石像鬼守护）
-   */
-  private executeImmune(game: Game, effect: SkillEffect): EffectOutcome {
-    const state = this.playerStates.get(effect.targetId);
-    if (!state) {
-      return { success: false, message: '目标不存在' };
-    }
-
-    state.gargoyleProtected = true;
-    state.cannotAct = true; // 被石化的人也无法行动
-
-    return {
-      success: true,
-      protected: effect.targetId,
-      message: `${effect.targetId}号被石化，免疫所有技能`,
-    };
-  }
-
-  /**
    * 执行梦死效果（摄梦人连续2晚梦游同一人）
    */
   private executeDreamKill(game: Game, effect: SkillEffect): EffectOutcome {
@@ -464,6 +477,32 @@ export class SkillResolver {
   }
 
   /**
+   * 处理同守同救（奶穿）：守卫守护 + 女巫解药同时作用于狼刀目标时，目标死亡
+   * 场景：守卫守护了目标A → 狼刀A被挡（willDie=false）→ 女巫解药A（savedByWitch=true）
+   * 此时 protected + savedByWitch 同时为 true，触发奶穿
+   */
+  private processGuardSaveConflict(game: Game, result: SettleResult): void {
+    for (const [playerId, state] of this.playerStates) {
+      if (state.protected && state.savedByWitch) {
+        // 同守同救：目标死亡
+        state.willDie = true;
+        state.deathReason = DeathReason.GUARD_SAVE_CONFLICT;
+
+        if (!result.deaths.includes(playerId)) {
+          result.deaths.push(playerId);
+        }
+        // 如果之前在 revives 列表中，移除
+        const reviveIdx = result.revives.indexOf(playerId);
+        if (reviveIdx > -1) {
+          result.revives.splice(reviveIdx, 1);
+        }
+
+        result.messages.push(`${playerId}号被同守同救（奶穿），反而死亡`);
+      }
+    }
+  }
+
+  /**
    * 处理连结死亡（狼美人）
    */
   private processLinkedDeaths(game: Game, result: SettleResult): void {
@@ -480,6 +519,36 @@ export class SkillResolver {
           result.deaths.push(state.linkedTo);
           result.messages.push(`${state.linkedTo}号因狼美人死亡而殉情`);
         }
+      }
+    }
+  }
+
+  /**
+   * 处理摄梦人死亡连带：摄梦人夜间死亡时，当晚梦游的目标一同死亡
+   */
+  private processDreamerDeathLinkage(game: Game, result: SettleResult): void {
+    for (const deadId of [...result.deaths]) {
+      const deadPlayer = game.players.find(p => p.playerId === deadId);
+      if (!deadPlayer || deadPlayer.role !== 'dreamer') continue;
+
+      // 找到当晚摄梦人的梦游目标
+      const dreamTarget = deadPlayer.abilities.lastDreamTarget;
+      if (!dreamTarget) continue;
+
+      const targetPlayer = game.players.find(p => p.playerId === dreamTarget);
+      if (!targetPlayer || !targetPlayer.alive) continue;
+
+      // 梦游目标不在已死亡列表中才添加
+      if (!result.deaths.includes(dreamTarget)) {
+        result.deaths.push(dreamTarget);
+
+        const targetState = this.playerStates.get(dreamTarget);
+        if (targetState) {
+          targetState.willDie = true;
+          targetState.deathReason = DeathReason.DREAM_KILL;
+        }
+
+        result.messages.push(`${dreamTarget}号因摄梦人死亡而连带死亡`);
       }
     }
   }

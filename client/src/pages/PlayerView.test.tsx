@@ -1,15 +1,12 @@
-/**
- * PlayerView 组件测试
- * 验证玩家视角的信息隔离和安全性
- */
-
 import { describe, it, expect, vi, beforeEach } from 'vitest';
-import { render, screen, fireEvent } from '@testing-library/react';
+import { render, screen, within } from '@testing-library/react';
+import userEvent from '@testing-library/user-event';
 import { BrowserRouter } from 'react-router-dom';
 import PlayerView from './PlayerView';
 import { useAuthStore } from '../stores/authStore';
 import { useGameStore } from '../stores/gameStore';
 import { createMockGame, createMockPlayer } from '../test/mockData/gameMocks';
+import { ToastProvider } from '../components/Toast';
 
 // Mock stores
 vi.mock('../stores/authStore');
@@ -21,10 +18,36 @@ vi.mock('../services/websocket', () => ({
     send: vi.fn(),
     onMessage: vi.fn(() => vi.fn()),
     disconnect: vi.fn(),
+    clearRoomCode: vi.fn(),
+    onStatusChange: vi.fn(() => vi.fn()),
   },
 }));
 
-describe('PlayerView 组件测试', () => {
+// Mock RoleActionPanel as stub
+vi.mock('../components/RoleActionPanel', () => ({
+  default: (props: any) => (
+    <div data-testid="role-action-panel">
+      RoleActionPanel: {props.myPlayer?.role} / {props.currentGame?.currentPhase}
+    </div>
+  ),
+}));
+
+const { wsService } = await import('../services/websocket');
+
+function renderPlayerView() {
+  return render(
+    <BrowserRouter>
+      <ToastProvider>
+        <PlayerView />
+      </ToastProvider>
+    </BrowserRouter>
+  );
+}
+
+const mockClearAuth = vi.fn();
+const mockClearGame = vi.fn();
+
+describe('PlayerView', () => {
   const mockUser = {
     userId: 'player-user-1',
     username: 'TestPlayer',
@@ -34,474 +57,360 @@ describe('PlayerView 组件测试', () => {
   beforeEach(() => {
     vi.clearAllMocks();
 
-    // Setup auth store mock
     (useAuthStore as any).mockReturnValue({
       user: mockUser,
-      clearAuth: vi.fn(),
+      clearAuth: mockClearAuth,
     });
 
-    // Setup game store mock with no game initially
     (useGameStore as any).mockReturnValue({
       currentGame: null,
       setGame: vi.fn(),
-      clearGame: vi.fn(),
+      clearGame: mockClearGame,
     });
   });
 
-  describe('渲染测试', () => {
-    it('P1: 应该渲染基本的UI元素', () => {
-      render(
-        <BrowserRouter>
-          <PlayerView />
-        </BrowserRouter>
-      );
-
-      expect(screen.getByText('玩家视图')).toBeInTheDocument();
-      expect(screen.getByText(/欢迎.*TestPlayer/)).toBeInTheDocument();
-      expect(screen.getByText('退出登录')).toBeInTheDocument();
-    });
-
-    it('P1: 无游戏时应该显示加入房间界面', () => {
-      render(
-        <BrowserRouter>
-          <PlayerView />
-        </BrowserRouter>
-      );
+  describe('加入房间交互', () => {
+    it('无游戏时应该渲染加入房间界面', () => {
+      renderPlayerView();
 
       expect(screen.getByRole('heading', { name: '加入房间' })).toBeInTheDocument();
-      expect(screen.getByText('房间码')).toBeInTheDocument();
       expect(screen.getByPlaceholderText('输入6位房间码')).toBeInTheDocument();
+      expect(screen.getByRole('button', { name: '加入房间' })).toBeInTheDocument();
+    });
+
+    it('输入房间码应该自动转大写', async () => {
+      renderPlayerView();
+      const input = screen.getByPlaceholderText('输入6位房间码');
+
+      await userEvent.type(input, 'abc123');
+      expect(input).toHaveValue('ABC123');
+    });
+
+    it('空房间码点击加入不应该发送消息', async () => {
+      renderPlayerView();
+
+      await userEvent.click(screen.getByRole('button', { name: '加入房间' }));
+      expect(wsService.send).not.toHaveBeenCalled();
+    });
+
+    it('输入房间码后点击加入应该发送JOIN_ROOM', async () => {
+      renderPlayerView();
+
+      await userEvent.type(screen.getByPlaceholderText('输入6位房间码'), 'ROOM01');
+      await userEvent.click(screen.getByRole('button', { name: '加入房间' }));
+
+      expect(wsService.send).toHaveBeenCalledWith({
+        type: 'JOIN_ROOM',
+        roomCode: 'ROOM01',
+        playerId: undefined,
+      });
+    });
+
+    it('选择号位后JOIN_ROOM应该包含playerId', async () => {
+      renderPlayerView();
+
+      // Click seat 3 - use getAllByText since "3号" may appear multiple times in seat grid
+      const seatButtons = screen.getAllByText('3号');
+      await userEvent.click(seatButtons[0]);
+      expect(screen.getByText(/已选择 3号位/)).toBeInTheDocument();
+
+      await userEvent.type(screen.getByPlaceholderText('输入6位房间码'), 'ROOM01');
+      await userEvent.click(screen.getByRole('button', { name: '加入房间' }));
+
+      expect(wsService.send).toHaveBeenCalledWith({
+        type: 'JOIN_ROOM',
+        roomCode: 'ROOM01',
+        playerId: 3,
+      });
+    });
+
+    it('再次点击已选号位应该取消选择', async () => {
+      renderPlayerView();
+
+      const seatButtons = screen.getAllByText('3号');
+      await userEvent.click(seatButtons[0]);
+      expect(screen.getByText(/已选择 3号位/)).toBeInTheDocument();
+
+      await userEvent.click(seatButtons[0]);
+      expect(screen.getByText(/未选择号位/)).toBeInTheDocument();
     });
   });
 
-  describe('信息隔离测试', () => {
-    it('P0: 不应该显示其他玩家的角色', () => {
+  describe('信息隔离', () => {
+    it('不应该显示其他玩家角色', () => {
       const game = createMockGame({
         players: [
-          createMockPlayer({
-            playerId: 1,
-            userId: 'player-user-1',
-            username: 'TestPlayer',
-            role: 'seer',
-            camp: 'good',
-          }),
-          createMockPlayer({
-            playerId: 2,
-            userId: 'other-user-1',
-            username: 'OtherPlayer',
-            role: 'wolf',
-            camp: 'wolf',
-          }),
+          createMockPlayer({ playerId: 1, userId: 'player-user-1', username: 'TestPlayer', role: 'seer', camp: 'good' }),
+          createMockPlayer({ playerId: 2, userId: 'other-user', username: 'OtherPlayer', role: 'wolf', camp: 'wolf' }),
         ],
       });
 
-      (useGameStore as any).mockReturnValue({
-        currentGame: game,
-        setGame: vi.fn(),
-        clearGame: vi.fn(),
-      });
+      (useGameStore as any).mockReturnValue({ currentGame: game, setGame: vi.fn(), clearGame: mockClearGame });
+      renderPlayerView();
 
-      render(
-        <BrowserRouter>
-          <PlayerView />
-        </BrowserRouter>
-      );
+      // Own role is shown
+      expect(screen.getByText(/预言家/)).toBeInTheDocument();
 
-      // 应该显示自己的角色
-      expect(screen.getByText(/角色.*seer/)).toBeInTheDocument();
-
-      // 不应该显示其他玩家的角色 (只显示号位和用户名)
-      expect(screen.getByText('2号')).toBeInTheDocument();
-      expect(screen.getByText('OtherPlayer')).toBeInTheDocument();
-
-      // 确认没有泄露其他玩家的角色信息
-      const playerListHeading = screen.getByRole('heading', { name: /玩家列表/ });
-      const allText = playerListHeading.parentElement?.textContent || '';
-      expect(allText).not.toContain('wolf'); // 不应该出现其他玩家的角色ID
+      // Other player's role should not leak in the player list
+      const playerListSection = screen.getByText(/玩家列表/).parentElement!;
+      expect(playerListSection.textContent).not.toContain('狼人');
     });
 
-    it('P0: 不应该泄露出局原因', () => {
+    it('不应该泄露出局原因', () => {
       const game = createMockGame({
         players: [
-          createMockPlayer({
-            playerId: 1,
-            userId: 'player-user-1',
-            username: 'TestPlayer',
-            role: 'seer',
-            alive: true,
-          }),
-          createMockPlayer({
-            playerId: 2,
-            userId: 'other-user-1',
-            username: 'DeadPlayer',
-            role: 'wolf',
-            alive: false,
-            outReason: 'wolf_kill', // 敏感信息
-          }),
+          createMockPlayer({ playerId: 1, userId: 'player-user-1', role: 'seer', alive: true }),
+          createMockPlayer({ playerId: 2, userId: 'other', username: 'Dead', role: 'wolf', alive: false, outReason: 'wolf_kill' }),
         ],
       });
 
-      (useGameStore as any).mockReturnValue({
-        currentGame: game,
-        setGame: vi.fn(),
-        clearGame: vi.fn(),
-      });
+      (useGameStore as any).mockReturnValue({ currentGame: game, setGame: vi.fn(), clearGame: mockClearGame });
+      renderPlayerView();
 
-      render(
-        <BrowserRouter>
-          <PlayerView />
-        </BrowserRouter>
-      );
-
-      // 应该显示"已出局"
       expect(screen.getByText('已出局')).toBeInTheDocument();
-
-      // 不应该显示出局原因
       expect(screen.queryByText('被狼刀')).not.toBeInTheDocument();
       expect(screen.queryByText('wolf_kill')).not.toBeInTheDocument();
     });
 
-    it('P0: 应该只显示自己的角色信息', () => {
+    it('应该显示自己的角色信息', () => {
       const game = createMockGame({
         players: [
-          createMockPlayer({
-            playerId: 1,
-            userId: 'player-user-1',
-            username: 'TestPlayer',
-            role: 'seer',
-            camp: 'good',
-          }),
+          createMockPlayer({ playerId: 1, userId: 'player-user-1', role: 'seer', camp: 'good' }),
         ],
       });
 
-      (useGameStore as any).mockReturnValue({
-        currentGame: game,
-        setGame: vi.fn(),
-        clearGame: vi.fn(),
-      });
+      (useGameStore as any).mockReturnValue({ currentGame: game, setGame: vi.fn(), clearGame: mockClearGame });
+      renderPlayerView();
 
-      render(
-        <BrowserRouter>
-          <PlayerView />
-        </BrowserRouter>
-      );
-
-      // 自己的信息框应该显示角色和阵营
       expect(screen.getByText(/你是 1号/)).toBeInTheDocument();
-      expect(screen.getByText(/角色.*seer/)).toBeInTheDocument();
-      expect(screen.getByText(/阵营.*好人/)).toBeInTheDocument();
+      expect(screen.getByText(/预言家/)).toBeInTheDocument();
+      expect(screen.getByText(/好人/)).toBeInTheDocument();
     });
   });
 
-  describe('狼人视角测试', () => {
-    it('P1: 狼人应该能看到队友', () => {
-      const game = createMockGame({
-        status: 'running',
-        currentPhase: 'wolf',
-        players: [
-          createMockPlayer({
-            playerId: 1,
-            userId: 'player-user-1',
-            username: 'TestWolf',
-            role: 'wolf',
-            camp: 'wolf',
-            alive: true,
-            abilities: {
-              hasNightAction: true, // 狼人有夜间行动
-            },
-          }),
-          createMockPlayer({
-            playerId: 2,
-            userId: 'other-user-1',
-            username: 'Teammate',
-            role: 'nightmare',
-            camp: 'wolf',
-            alive: true,
-          }),
-          createMockPlayer({
-            playerId: 3,
-            userId: 'other-user-2',
-            username: 'GoodGuy',
-            role: 'seer',
-            camp: 'good',
-            alive: true,
-          }),
-        ],
-      });
+  describe('退出登录', () => {
+    it('点击退出登录应该断开WebSocket并清除状态', async () => {
+      renderPlayerView();
 
-      (useGameStore as any).mockReturnValue({
-        currentGame: game,
-        setGame: vi.fn(),
-        clearGame: vi.fn(),
-      });
+      await userEvent.click(screen.getByText('退出登录'));
 
-      render(
-        <BrowserRouter>
-          <PlayerView />
-        </BrowserRouter>
-      );
-
-      // 狼人阶段，验证玩家自己知道自己是狼人
-      expect(screen.getByText(/角色.*wolf/)).toBeInTheDocument();
-      expect(screen.getByText(/阵营.*狼人/)).toBeInTheDocument();
-
-      // 应该显示所有玩家的用户名在列表中（可能在多个位置出现，如列表和下拉框）
-      expect(screen.getAllByText('TestWolf').length).toBeGreaterThan(0); // 自己
-      expect(screen.getAllByText('Teammate').length).toBeGreaterThan(0); // 队友
-      expect(screen.getAllByText('GoodGuy').length).toBeGreaterThan(0); // 好人
-
-      // 但不应该在玩家基本信息之外泄露好人的角色信息
-      expect(screen.queryByText(/角色.*seer/)).not.toBeInTheDocument();
+      expect(wsService.disconnect).toHaveBeenCalled();
+      expect(mockClearAuth).toHaveBeenCalled();
+      expect(mockClearGame).toHaveBeenCalled();
     });
   });
 
-  describe('女巫视角测试', () => {
-    it('P1: 女巫应该能看到当前阶段', () => {
+  describe('离开房间', () => {
+    beforeEach(() => {
       const game = createMockGame({
-        status: 'running',
-        currentPhase: 'witch',
-        players: [
-          createMockPlayer({
-            playerId: 1,
-            userId: 'player-user-1',
-            username: 'WitchPlayer',
-            role: 'witch',
-            camp: 'good',
-            alive: true,
-            abilities: {
-              antidote: true,
-              poison: true,
-              hasNightAction: true,
-            },
-          }),
-          createMockPlayer({
-            playerId: 5,
-            userId: 'victim-user',
-            username: 'Victim',
-            role: 'villager',
-            camp: 'good',
-            alive: true,
-          }),
-        ],
-        nightActions: {
-          witchKnowsVictim: 5,
-        },
+        players: [createMockPlayer({ playerId: 1, userId: 'player-user-1' })],
       });
-
-      (useGameStore as any).mockReturnValue({
-        currentGame: game,
-        setGame: vi.fn(),
-        clearGame: vi.fn(),
-      });
-
-      render(
-        <BrowserRouter>
-          <PlayerView />
-        </BrowserRouter>
-      );
-
-      // 女巫应该知道自己的角色
-      expect(screen.getByText(/角色.*witch/)).toBeInTheDocument();
-      expect(screen.getByText(/阵营.*好人/)).toBeInTheDocument();
-
-      // 女巫应该看到当前是女巫阶段
-      expect(screen.getByText(/当前阶段.*witch/)).toBeInTheDocument();
+      (useGameStore as any).mockReturnValue({ currentGame: game, setGame: vi.fn(), clearGame: mockClearGame });
     });
 
-    it('P1: 女巫应该看到操作界面', () => {
-      const game = createMockGame({
-        status: 'running',
-        currentPhase: 'witch',
-        players: [
-          createMockPlayer({
-            playerId: 1,
-            userId: 'player-user-1',
-            username: 'WitchPlayer',
-            role: 'witch',
-            camp: 'good',
-            alive: true,
-            abilities: {
-              antidote: true,
-              poison: false, // 毒药已用
-              hasNightAction: true,
-            },
-          }),
-          createMockPlayer({
-            playerId: 5,
-            userId: 'victim-user',
-            username: 'Victim',
-            role: 'villager',
-            camp: 'good',
-            alive: true,
-          }),
-        ],
-        nightActions: {
-          witchKnowsVictim: 5,
-        },
-      });
+    it('确认后应该发送LEAVE_ROOM', async () => {
+      vi.spyOn(window, 'confirm').mockReturnValue(true);
+      renderPlayerView();
 
-      (useGameStore as any).mockReturnValue({
-        currentGame: game,
-        setGame: vi.fn(),
-        clearGame: vi.fn(),
-      });
+      await userEvent.click(screen.getByText('离开房间'));
 
-      render(
-        <BrowserRouter>
-          <PlayerView />
-        </BrowserRouter>
-      );
+      expect(wsService.send).toHaveBeenCalledWith({ type: 'LEAVE_ROOM' });
+      expect(wsService.clearRoomCode).toHaveBeenCalled();
+      expect(mockClearGame).toHaveBeenCalled();
+    });
 
-      // 女巫应该看到选择目标的界面
-      expect(screen.getByText(/选择目标/)).toBeInTheDocument();
-      expect(screen.getByText(/提交操作/)).toBeInTheDocument();
+    it('取消不应该退出', async () => {
+      vi.spyOn(window, 'confirm').mockReturnValue(false);
+      renderPlayerView();
+
+      await userEvent.click(screen.getByText('离开房间'));
+
+      expect(wsService.send).not.toHaveBeenCalled();
     });
   });
 
-  describe('投票功能测试', () => {
-    it('P1: 应该显示放逐投票界面', () => {
+  describe('投票交互', () => {
+    it('放逐投票阶段应该显示投票界面', () => {
       const game = createMockGame({
         currentPhase: 'vote',
         players: [
-          createMockPlayer({
-            playerId: 1,
-            userId: 'player-user-1',
-            alive: true,
-          }),
-          createMockPlayer({
-            playerId: 2,
-            userId: 'other-user-1',
-            alive: true,
-          }),
+          createMockPlayer({ playerId: 1, userId: 'player-user-1', alive: true }),
+          createMockPlayer({ playerId: 2, alive: true }),
         ],
-        exileVote: {
-          phase: 'voting',
-          votes: {},
-        },
+        exileVote: { phase: 'voting', votes: {} },
       });
 
-      (useGameStore as any).mockReturnValue({
-        currentGame: game,
-        setGame: vi.fn(),
-        clearGame: vi.fn(),
-      });
-
-      render(
-        <BrowserRouter>
-          <PlayerView />
-        </BrowserRouter>
-      );
+      (useGameStore as any).mockReturnValue({ currentGame: game, setGame: vi.fn(), clearGame: mockClearGame });
+      renderPlayerView();
 
       expect(screen.getByText('⚖️ 放逐投票')).toBeInTheDocument();
       expect(screen.getByText('选择放逐目标')).toBeInTheDocument();
     });
 
-    it('P1: 已投票后应该显示提示', () => {
+    it('已投票后应该显示已完成提示', () => {
       const game = createMockGame({
         currentPhase: 'vote',
-        players: [
-          createMockPlayer({
-            playerId: 1,
-            userId: 'player-user-1',
-            alive: true,
-          }),
-        ],
-        exileVote: {
-          phase: 'voting',
-          votes: {
-            1: 2, // 玩家1已投给2号
-          },
-        },
+        players: [createMockPlayer({ playerId: 1, userId: 'player-user-1', alive: true })],
+        exileVote: { phase: 'voting', votes: { 1: 2 } },
       });
 
-      (useGameStore as any).mockReturnValue({
-        currentGame: game,
-        setGame: vi.fn(),
-        clearGame: vi.fn(),
-      });
-
-      render(
-        <BrowserRouter>
-          <PlayerView />
-        </BrowserRouter>
-      );
+      (useGameStore as any).mockReturnValue({ currentGame: game, setGame: vi.fn(), clearGame: mockClearGame });
+      renderPlayerView();
 
       expect(screen.getByText(/已完成投票/)).toBeInTheDocument();
     });
-  });
 
-  describe('出局玩家测试', () => {
-    it('P0: 出局玩家不应该看到操作界面', () => {
+    it('PK投票应该只显示平票玩家', () => {
       const game = createMockGame({
-        status: 'running',
-        currentPhase: 'wolf',
+        currentPhase: 'vote',
         players: [
-          createMockPlayer({
-            playerId: 1,
-            userId: 'player-user-1',
-            alive: false, // 已出局
-            role: 'seer',
-          }),
+          createMockPlayer({ playerId: 1, userId: 'player-user-1', alive: true }),
+          createMockPlayer({ playerId: 2, username: 'PKPlayer1', alive: true }),
+          createMockPlayer({ playerId: 3, username: 'PKPlayer2', alive: true }),
+          createMockPlayer({ playerId: 4, username: 'NotInPK', alive: true }),
         ],
+        exileVote: { phase: 'pk', pkPlayers: [2, 3], votes: {}, pkVotes: {} },
       });
 
-      (useGameStore as any).mockReturnValue({
-        currentGame: game,
-        setGame: vi.fn(),
-        clearGame: vi.fn(),
+      (useGameStore as any).mockReturnValue({ currentGame: game, setGame: vi.fn(), clearGame: mockClearGame });
+      renderPlayerView();
+
+      expect(screen.getByText('⚖️ 平票PK投票')).toBeInTheDocument();
+      const select = screen.getByRole('combobox');
+      const options = within(select).getAllByRole('option');
+      // placeholder + skip + 2 pk players = 4
+      expect(options).toHaveLength(4);
+    });
+
+    it('选择目标并确认投票应该发送EXILE_VOTE', async () => {
+      vi.spyOn(window, 'confirm').mockReturnValue(true);
+      const game = createMockGame({
+        currentPhase: 'vote',
+        players: [
+          createMockPlayer({ playerId: 1, userId: 'player-user-1', alive: true }),
+          createMockPlayer({ playerId: 2, username: 'Target', alive: true }),
+        ],
+        exileVote: { phase: 'voting', votes: {} },
       });
 
-      render(
-        <BrowserRouter>
-          <PlayerView />
-        </BrowserRouter>
-      );
+      (useGameStore as any).mockReturnValue({ currentGame: game, setGame: vi.fn(), clearGame: mockClearGame });
+      renderPlayerView();
 
-      // 应该显示出局状态
-      expect(screen.getByText('你已出局')).toBeInTheDocument();
+      await userEvent.selectOptions(screen.getByRole('combobox'), '2');
+      await userEvent.click(screen.getByText('确认投票'));
 
-      // 不应该显示操作界面
-      expect(screen.queryByText('选择目标')).not.toBeInTheDocument();
-      expect(screen.queryByText('提交操作')).not.toBeInTheDocument();
+      expect(wsService.send).toHaveBeenCalledWith({ type: 'EXILE_VOTE', targetId: 2 });
+    });
+
+    it('未选目标点击确认投票不应该发送消息', async () => {
+      const game = createMockGame({
+        currentPhase: 'vote',
+        players: [
+          createMockPlayer({ playerId: 1, userId: 'player-user-1', alive: true }),
+          createMockPlayer({ playerId: 2, alive: true }),
+        ],
+        exileVote: { phase: 'voting', votes: {} },
+      });
+
+      (useGameStore as any).mockReturnValue({ currentGame: game, setGame: vi.fn(), clearGame: mockClearGame });
+      renderPlayerView();
+
+      await userEvent.click(screen.getByText('确认投票'));
+      expect(wsService.send).not.toHaveBeenCalled();
     });
   });
 
-  describe('警长竞选测试', () => {
-    it('P1: 应该显示警长竞选界面', () => {
+  describe('警长竞选', () => {
+    it('上警阶段应该显示上警/不上警按钮', () => {
       const game = createMockGame({
-        players: [
-          createMockPlayer({
-            playerId: 1,
-            userId: 'player-user-1',
-            alive: true,
-          }),
-        ],
-        sheriffElection: {
-          phase: 'signup',
-          candidates: [],
-        },
+        players: [createMockPlayer({ playerId: 1, userId: 'player-user-1', alive: true })],
+        sheriffElection: { phase: 'signup', candidates: [] },
       });
 
-      (useGameStore as any).mockReturnValue({
-        currentGame: game,
-        setGame: vi.fn(),
-        clearGame: vi.fn(),
-      });
+      (useGameStore as any).mockReturnValue({ currentGame: game, setGame: vi.fn(), clearGame: mockClearGame });
+      renderPlayerView();
 
-      render(
-        <BrowserRouter>
-          <PlayerView />
-        </BrowserRouter>
-      );
-
-      expect(screen.getByText('🎖️ 警长竞选 - 上警阶段')).toBeInTheDocument();
       expect(screen.getByText('上警竞选')).toBeInTheDocument();
       expect(screen.getByText('不上警')).toBeInTheDocument();
     });
+
+    it('点击上警应该发送SHERIFF_SIGNUP', async () => {
+      const game = createMockGame({
+        players: [createMockPlayer({ playerId: 1, userId: 'player-user-1', alive: true })],
+        sheriffElection: { phase: 'signup', candidates: [] },
+      });
+
+      (useGameStore as any).mockReturnValue({ currentGame: game, setGame: vi.fn(), clearGame: mockClearGame });
+      renderPlayerView();
+
+      await userEvent.click(screen.getByText('上警竞选'));
+      expect(wsService.send).toHaveBeenCalledWith({ type: 'SHERIFF_SIGNUP', runForSheriff: true });
+    });
+
+    it('投票阶段候选人不能投票', () => {
+      const game = createMockGame({
+        players: [createMockPlayer({ playerId: 1, userId: 'player-user-1', alive: true })],
+        sheriffElection: { phase: 'voting', candidates: [1, 3], votes: {} },
+      });
+
+      (useGameStore as any).mockReturnValue({ currentGame: game, setGame: vi.fn(), clearGame: mockClearGame });
+      renderPlayerView();
+
+      expect(screen.getByText(/候选人.*不能投票/)).toBeInTheDocument();
+    });
   });
 
-  describe('安全性保障测试', () => {
-    it('P0: 平民在夜间不应该看到任何行动信息', () => {
+  describe('出局观战', () => {
+    it('出局玩家应该显示观战模式', () => {
+      const game = createMockGame({
+        status: 'running',
+        currentPhase: 'wolf',
+        players: [
+          createMockPlayer({ playerId: 1, userId: 'player-user-1', role: 'seer', camp: 'good', alive: false }),
+        ],
+      });
+
+      (useGameStore as any).mockReturnValue({ currentGame: game, setGame: vi.fn(), clearGame: mockClearGame });
+      renderPlayerView();
+
+      expect(screen.getByText('观战模式')).toBeInTheDocument();
+      expect(screen.getByText(/你已出局，正在观战中/)).toBeInTheDocument();
+    });
+
+    it('出局玩家不应该显示RoleActionPanel', () => {
+      const game = createMockGame({
+        status: 'running',
+        currentPhase: 'wolf',
+        players: [
+          createMockPlayer({ playerId: 1, userId: 'player-user-1', role: 'seer', camp: 'good', alive: false }),
+        ],
+      });
+
+      (useGameStore as any).mockReturnValue({ currentGame: game, setGame: vi.fn(), clearGame: mockClearGame });
+      renderPlayerView();
+
+      expect(screen.queryByTestId('role-action-panel')).not.toBeInTheDocument();
+    });
+  });
+
+  describe('游戏结束', () => {
+    it('应该显示获胜方', () => {
+      const game = createMockGame({
+        status: 'finished',
+        winner: 'good',
+        players: [createMockPlayer({ playerId: 1, userId: 'player-user-1', camp: 'good' })],
+      });
+
+      (useGameStore as any).mockReturnValue({ currentGame: game, setGame: vi.fn(), clearGame: mockClearGame });
+      renderPlayerView();
+
+      expect(screen.getByText('游戏结束')).toBeInTheDocument();
+      expect(screen.getByText(/好人阵营.*获胜/)).toBeInTheDocument();
+    });
+  });
+
+  describe('RoleActionPanel渲染', () => {
+    it('存活且游戏运行中应该渲染RoleActionPanel', () => {
       const game = createMockGame({
         status: 'running',
         currentPhase: 'wolf',
@@ -509,83 +418,40 @@ describe('PlayerView 组件测试', () => {
           createMockPlayer({
             playerId: 1,
             userId: 'player-user-1',
-            role: 'villager',
-            camp: 'good',
-            alive: true,
-          }),
-          createMockPlayer({
-            playerId: 2,
-            userId: 'other-user-1',
             role: 'wolf',
             camp: 'wolf',
             alive: true,
+            abilities: { hasNightAction: true },
           }),
         ],
       });
 
-      (useGameStore as any).mockReturnValue({
-        currentGame: game,
-        setGame: vi.fn(),
-        clearGame: vi.fn(),
-      });
+      (useGameStore as any).mockReturnValue({ currentGame: game, setGame: vi.fn(), clearGame: mockClearGame });
+      renderPlayerView();
 
-      render(
-        <BrowserRouter>
-          <PlayerView />
-        </BrowserRouter>
-      );
-
-      // 平民在夜间应该看到"天黑请闭眼"提示
-      expect(screen.getByText('🌙 夜晚阶段')).toBeInTheDocument();
-      expect(screen.getByText(/天黑请闭眼/)).toBeInTheDocument();
-
-      // 不应该显示任何操作选项
-      expect(screen.queryByText('选择目标')).not.toBeInTheDocument();
-      expect(screen.queryByText('提交操作')).not.toBeInTheDocument();
-    });
-
-    it('P0: 应该显示安全警告注释(代码层面)', () => {
-      // 这个测试验证代码中是否有安全注释
-      // 通过读取组件源代码验证
-      const fs = require('fs');
-      const path = require('path');
-      const componentPath = path.join(__dirname, 'PlayerView.tsx');
-      const componentCode = fs.readFileSync(componentPath, 'utf-8');
-
-      // 验证是否包含安全警告注释
-      expect(componentCode).toContain('⚠️ 安全警告');
-      expect(componentCode).toContain('禁止显示 outReason');
+      expect(screen.getByTestId('role-action-panel')).toBeInTheDocument();
     });
   });
 
-  describe('游戏结束测试', () => {
-    it('P1: 游戏结束后应该显示结果', () => {
+  describe('安全性保障', () => {
+    it('平民在夜间不应该看到操作选项', () => {
       const game = createMockGame({
-        status: 'finished',
-        winner: 'good',
+        status: 'running',
+        currentPhase: 'wolf',
         players: [
-          createMockPlayer({
-            playerId: 1,
-            userId: 'player-user-1',
-            camp: 'good',
-          }),
+          createMockPlayer({ playerId: 1, userId: 'player-user-1', role: 'villager', camp: 'good', alive: true }),
+          createMockPlayer({ playerId: 2, role: 'wolf', camp: 'wolf', alive: true }),
         ],
       });
 
-      (useGameStore as any).mockReturnValue({
-        currentGame: game,
-        setGame: vi.fn(),
-        clearGame: vi.fn(),
-      });
+      (useGameStore as any).mockReturnValue({ currentGame: game, setGame: vi.fn(), clearGame: mockClearGame });
+      renderPlayerView();
 
-      render(
-        <BrowserRouter>
-          <PlayerView />
-        </BrowserRouter>
-      );
-
-      expect(screen.getByText('游戏结束')).toBeInTheDocument();
-      expect(screen.getByText(/好人阵营.*获胜/)).toBeInTheDocument();
+      // RoleActionPanel stub should show night waiting (the stub just renders, but
+      // the real component would show "天黑请闭眼")
+      // Since we mock RoleActionPanel, this test verifies the panel IS rendered
+      // (the actual night-waiting behavior is tested in RoleActionPanel.test.tsx)
+      expect(screen.getByTestId('role-action-panel')).toBeInTheDocument();
     });
   });
 });

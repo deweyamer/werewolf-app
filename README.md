@@ -7,29 +7,21 @@
 
 ## 📚 文档导航
 
-### 快速开始
-- 🚀 **[5分钟快速开始](./QUICK_START.md)** - 本地运行游戏
-- 📖 **[完整使用指南](./USER_GUIDE.md)** - 详细的游戏说明
-- 🔥 **[热重载开发指南](./HOT_RELOAD.md)** - 开发环境配置
+### 开发与使用
+- 🚀 **[5分钟快速开始](./docs/development/QUICK_START.md)** - 本地运行游戏
+- 📖 **[完整使用指南](./docs/development/USER_GUIDE.md)** - 详细的游戏说明
+- 🔥 **[热重载开发指南](./docs/development/HOT_RELOAD.md)** - 开发环境配置
 
 ### 部署文档
-- 🤔 **[部署方式选择指南](./CHOOSE_DEPLOYMENT.md)** - 不知道选哪个？看这里！
-- 🐳 **[Docker本地部署](./DOCKER_DEPLOYMENT.md)** - 推荐！一键Docker部署（1分钟）
-- ☁️ **[阿里云函数计算](./ALIYUN_FC_DEPLOYMENT.md)** - 阿里云Serverless部署（前后端分离）
-- ⚡ **[快速云端部署](./DEPLOY_STEPS.md)** - 5分钟部署到云端
-- 📋 **[完整部署指南](./DEPLOYMENT_GUIDE.md)** - 详细的部署方案对比
-- 🤖 **[GitHub Actions自动部署](./GITHUB_ACTIONS_GUIDE.md)** - CI/CD自动化流程
-- 🔧 **[更新URL指南](./UPDATE_URLS.md)** - 修改硬编码地址
+- 🐳 **[Docker本地部署](./docs/deployment/DOCKER_DEPLOYMENT.md)** - 推荐！一键Docker部署
+- ☁️ **[阿里云函数计算](./docs/deployment/ALIYUN_FC_DEPLOYMENT.md)** - 阿里云Serverless部署
+- ⚡ **[快速云端部署](./docs/deployment/DEPLOY_STEPS.md)** - Vercel + Railway 部署
+- 📋 **[完整部署指南](./docs/deployment/DEPLOYMENT_GUIDE.md)** - 详细的部署方案对比
+- 🤖 **[GitHub Actions](./docs/deployment/GITHUB_ACTIONS_GUIDE.md)** - CI/CD自动化流程
 
-### 优化文档
-- 🎮 **[游戏优化说明](./OPTIMIZATION.md)** - 上帝视角优化
-- 🧪 **[女巫界面设计](./WITCH_INTERFACE.md)** - 女巫专用界面
-- 📊 **[女巫界面对比](./WITCH_BEFORE_AFTER.md)** - 优化前后对比
-- 🧪 **[女巫测试指南](./WITCH_TEST_GUIDE.md)** - 完整测试流程
-- 📝 **[女巫更新总结](./WITCH_UPDATE_SUMMARY.md)** - 更新内容总结
-
-### 变更记录
-- 📝 **[更新日志](./CHANGES.md)** - 版本更新历史
+### 代码审查
+- 🔍 **[后端审查报告](./docs/review/BACKEND_REVIEW.md)** - 后端逻辑问题分析
+- 🔍 **[前端审查报告](./docs/review/FRONTEND_REVIEW.md)** - 前端易用性/简洁性/功能完备性分析
 
 ## 项目结构
 
@@ -113,7 +105,7 @@ docker-compose up -d
 # 浏览器打开: http://localhost:3000
 ```
 
-**就这么简单！** 详见 [Docker部署文档](./DOCKER_DEPLOYMENT.md)
+**就这么简单！** 详见 [Docker部署文档](./docs/deployment/DOCKER_DEPLOYMENT.md)
 
 ---
 
@@ -203,7 +195,7 @@ npm run dev
 
 ### 详细使用指南
 
-请查看 [USER_GUIDE.md](./USER_GUIDE.md) 获取完整的使用说明、角色介绍和游戏技巧。
+请查看 [USER_GUIDE.md](./docs/development/USER_GUIDE.md) 获取完整的使用说明、角色介绍和游戏技巧。
 
 ## 游戏流程
 

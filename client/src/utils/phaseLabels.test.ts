@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { translateDeathReason, getRoleName, getPhaseLabel } from './phaseLabels';
+import { translateDeathReason, getRoleName, getPhaseLabel, getPhaseIcon, getPhaseColorClass } from './phaseLabels';
 
 describe('phaseLabels utils', () => {
   describe('translateDeathReason', () => {
@@ -73,6 +73,32 @@ describe('phaseLabels utils', () => {
 
     it('应该返回原始阶段名称如果没有定义', () => {
       expect(getPhaseLabel('unknown_phase')).toBe('unknown_phase');
+    });
+  });
+
+  describe('getPhaseIcon', () => {
+    it('应该返回已知阶段的图标', () => {
+      expect(getPhaseIcon('wolf')).toBe('🐺');
+      expect(getPhaseIcon('witch')).toBe('🧪');
+      expect(getPhaseIcon('seer')).toBe('🔮');
+      expect(getPhaseIcon('guard')).toBe('🛡️');
+      expect(getPhaseIcon('fear')).toBe('🌙');
+    });
+
+    it('未知阶段应该返回问号图标', () => {
+      expect(getPhaseIcon('unknown')).toBe('❓');
+    });
+  });
+
+  describe('getPhaseColorClass', () => {
+    it('应该返回对应阶段的颜色类名', () => {
+      expect(getPhaseColorClass('wolf')).toBe('border-red-500 bg-red-600/20');
+      expect(getPhaseColorClass('seer')).toBe('border-cyan-500 bg-cyan-600/20');
+      expect(getPhaseColorClass('witch')).toBe('border-green-500 bg-green-600/20');
+    });
+
+    it('未知阶段应该使用默认灰色', () => {
+      expect(getPhaseColorClass('unknown')).toBe('border-gray-500 bg-gray-600/20');
     });
   });
 });

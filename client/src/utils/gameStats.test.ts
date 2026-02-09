@@ -3,6 +3,7 @@ import {
   calculateGameOverview,
   calculatePlayerStats,
   extractNightActionsSummary,
+  getPlayerSkillUsages,
   getRoleStatusText,
 } from './gameStats';
 import {
@@ -112,6 +113,60 @@ describe('gameStats utils', () => {
       expect(summary.witch!.action).toBe('save');
       expect(summary.witch!.submitted).toBe(true);
     });
+
+    it('应该提取恐惧(噩梦之影)行动', () => {
+      const game = createMockFullGame();
+      game.nightActions.fearSubmitted = true;
+      game.nightActions.fear = 6;
+
+      const summary = extractNightActionsSummary(game);
+
+      expect(summary.fear).toBeDefined();
+      expect(summary.fear!.actorId).toBe(1); // nightmare player is playerId 1
+      expect(summary.fear!.targetId).toBe(6);
+      expect(summary.fear!.submitted).toBe(true);
+    });
+
+    it('应该提取守卫行动', () => {
+      const game = createMockFullGame();
+      game.nightActions.guardSubmitted = true;
+      game.nightActions.guardTarget = 8;
+
+      const summary = extractNightActionsSummary(game);
+
+      expect(summary.guard).toBeDefined();
+      expect(summary.guard!.targetId).toBe(8);
+      expect(summary.guard!.submitted).toBe(true);
+    });
+
+    it('应该提取预言家行动', () => {
+      const game = createMockFullGame();
+      game.nightActions.seerSubmitted = true;
+      game.nightActions.seerCheck = 3;
+      game.nightActions.seerResult = 'wolf';
+
+      const summary = extractNightActionsSummary(game);
+
+      expect(summary.seer).toBeDefined();
+      expect(summary.seer!.actorId).toBe(6); // seer is playerId 6
+      expect(summary.seer!.targetId).toBe(3);
+      expect(summary.seer!.result).toBe('wolf');
+      expect(summary.seer!.submitted).toBe(true);
+    });
+
+    it('无夜间行动时返回空摘要', () => {
+      const game = createMockFullGame();
+      game.nightActions = {};
+
+      const summary = extractNightActionsSummary(game);
+
+      expect(summary.wolf).toBeUndefined();
+      expect(summary.witch).toBeUndefined();
+      expect(summary.seer).toBeUndefined();
+      expect(summary.fear).toBeUndefined();
+      expect(summary.guard).toBeUndefined();
+      expect(summary.gravekeeper).toBeUndefined();
+    });
   });
 
   describe('getRoleStatusText', () => {
@@ -212,6 +267,40 @@ describe('gameStats utils', () => {
       };
 
       expect(getRoleStatusText(player)).toBe('正常');
+    });
+  });
+
+  describe('getPlayerSkillUsages', () => {
+    it('应该返回指定玩家的技能使用记录', () => {
+      const game = createMockFullGame();
+      // player 2 has actorPlayerId=2 in history log-1
+      const usages = getPlayerSkillUsages(game, 2);
+
+      expect(usages).toHaveLength(1);
+      expect(usages[0].action).toBe('wolf_kill');
+      expect(usages[0].target).toBe(9);
+      expect(usages[0].round).toBe(1);
+    });
+
+    it('无技能记录的玩家应该返回空数组', () => {
+      const game = createMockFullGame();
+      // playerId 10 has no actions in history
+      const usages = getPlayerSkillUsages(game, 10);
+      expect(usages).toHaveLength(0);
+    });
+
+    it('应该包含正确的字段', () => {
+      const game = createMockFullGame();
+      const usages = getPlayerSkillUsages(game, 2);
+
+      expect(usages[0]).toEqual({
+        round: 1,
+        phase: 'wolf',
+        action: 'wolf_kill',
+        target: 9,
+        result: '狼人刀了9号',
+        timestamp: '2024-01-01T00:10:00.000Z',
+      });
     });
   });
 

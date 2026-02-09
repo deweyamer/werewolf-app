@@ -7,6 +7,7 @@ import { ScriptService } from './ScriptService.js';
 import { VotingSystem } from '../game/VotingSystem.js';
 import { RoleRegistry } from '../game/roles/RoleRegistry.js';
 import { GameFlowEngine } from '../game/flow/GameFlowEngine.js';
+import { BotService } from './BotService.js';
 
 const DATA_DIR = path.join(process.cwd(), 'data');
 const GAMES_FILE = path.join(DATA_DIR, 'games.json');
@@ -16,16 +17,20 @@ export class GameService {
   private scriptService: ScriptService;
   private votingSystem: VotingSystem;
   private gameFlowEngine: GameFlowEngine;
+  private botService: BotService;
+  private saveQueue: Promise<void> = Promise.resolve();
 
   constructor(scriptService: ScriptService) {
     this.scriptService = scriptService;
     this.votingSystem = new VotingSystem();
-    this.gameFlowEngine = new GameFlowEngine();
+    this.gameFlowEngine = new GameFlowEngine(this.votingSystem);
+    this.botService = new BotService(this);
   }
 
   async init() {
     await fs.mkdir(DATA_DIR, { recursive: true });
     await this.loadGames();
+    await this.cleanupStaleGames();
   }
 
   private async loadGames() {
@@ -37,8 +42,36 @@ export class GameService {
     }
   }
 
-  private async saveGames() {
-    await fs.writeFile(GAMES_FILE, JSON.stringify(this.games, null, 2));
+  private saveGames(): Promise<void> {
+    // 串行化写入，防止并发 WebSocket 事件触发的重叠写入导致文件损坏
+    this.saveQueue = this.saveQueue
+      .catch(() => {})
+      .then(() => fs.writeFile(GAMES_FILE, JSON.stringify(this.games, null, 2)));
+    return this.saveQueue;
+  }
+
+  /**
+   * 清理过期游戏：已结束超过24小时或创建超过48小时的游戏
+   */
+  private async cleanupStaleGames(): Promise<void> {
+    const now = Date.now();
+    const FINISHED_TTL = 24 * 60 * 60 * 1000; // 已结束游戏保留24小时
+    const ABANDONED_TTL = 48 * 60 * 60 * 1000; // 所有游戏最长保留48小时
+
+    const before = this.games.length;
+    this.games = this.games.filter(game => {
+      // 已结束的游戏：超过 FINISHED_TTL 则清理
+      if (game.status === 'finished' && game.finishedAt) {
+        return now - new Date(game.finishedAt).getTime() < FINISHED_TTL;
+      }
+      // 未结束的游戏：超过 ABANDONED_TTL 则清理
+      return now - new Date(game.createdAt).getTime() < ABANDONED_TTL;
+    });
+
+    if (this.games.length < before) {
+      console.log(`Cleaned up ${before - this.games.length} stale games`);
+      await this.saveGames();
+    }
   }
 
   private generateRoomCode(): string {
@@ -82,6 +115,41 @@ export class GameService {
 
     this.games.push(game);
     await this.saveGames();
+    return game;
+  }
+
+  /**
+   * 创建测试游戏（带12个机器人玩家）
+   * 用于快速测试游戏流程
+   */
+  async createTestGame(hostId: string, hostUsername: string, scriptId: string): Promise<Game | null> {
+    const game = await this.createGame(hostId, hostUsername, scriptId);
+    if (!game) return null;
+
+    const scriptWithPhases = this.scriptService.getScript(scriptId);
+    if (!scriptWithPhases) return null;
+
+    const { script } = scriptWithPhases;
+
+    // 添加12个机器人玩家
+    for (let i = 1; i <= script.playerCount; i++) {
+      const player: GamePlayer = {
+        userId: `bot-${i}`,
+        username: `Bot${i}`,
+        playerId: i,
+        role: '',
+        camp: 'good',
+        alive: true,
+        isSheriff: false,
+        abilities: {},
+        isBot: true,
+      };
+      game.players.push(player);
+    }
+
+    game.hasBot = true;
+    await this.saveGames();
+    console.log(`[Test] 创建测试游戏: ${game.roomCode}, 已添加 ${script.playerCount} 个机器人`);
     return game;
   }
 
@@ -148,10 +216,6 @@ export class GameService {
     if (index === -1) return false;
 
     game.players.splice(index, 1);
-    // 重新分配号位
-    game.players.forEach((p, i) => {
-      p.playerId = i + 1;
-    });
 
     await this.saveGames();
     return true;
@@ -265,6 +329,14 @@ export class GameService {
       };
     }
 
+    // 如果游戏有机器人，自动执行机器人行动
+    if (game.hasBot && game.status === 'running') {
+      const newPhase = result.phase as GamePhase;
+      await this.botService.executeBotActionsForPhase(game, newPhase);
+      // 再次保存（机器人行动后状态可能变化）
+      await this.saveGames();
+    }
+
     return {
       success: true,
       nextPhase: result.phase as GamePhase,
@@ -349,15 +421,57 @@ export class GameService {
     return result;
   }
 
-  async tallySheriffVotes(gameId: string): Promise<number | null> {
+  async tallySheriffVotes(gameId: string): Promise<{ winner: number | null; isTie: boolean; tiedPlayers?: number[] }> {
     const game = this.getGame(gameId);
-    if (!game) return null;
+    if (!game) return { winner: null, isTie: false };
 
-    const winner = this.votingSystem.tallySheriffVotes(game);
-    if (winner) {
+    const result = this.votingSystem.tallySheriffVotes(game);
+    await this.saveGames();
+    return result;
+  }
+
+  // ================= 警徽管理相关方法 =================
+
+  async handleSheriffDeath(gameId: string, sheriffId: number, deathReason: string): Promise<boolean> {
+    const game = this.getGame(gameId);
+    if (!game) return false;
+
+    this.votingSystem.handleSheriffDeath(game, sheriffId, deathReason);
+    await this.saveGames();
+    return true;
+  }
+
+  async transferSheriffBadge(gameId: string, targetId: number): Promise<boolean> {
+    const game = this.getGame(gameId);
+    if (!game) return false;
+
+    const result = this.votingSystem.transferSheriffBadge(game, targetId);
+    if (result) {
       await this.saveGames();
     }
-    return winner;
+    return result;
+  }
+
+  async destroySheriffBadge(gameId: string): Promise<boolean> {
+    const game = this.getGame(gameId);
+    if (!game) return false;
+
+    const result = this.votingSystem.destroySheriffBadge(game);
+    if (result) {
+      await this.saveGames();
+    }
+    return result;
+  }
+
+  async godAssignSheriff(gameId: string, targetId: number | 'none'): Promise<boolean> {
+    const game = this.getGame(gameId);
+    if (!game) return false;
+
+    const result = this.votingSystem.godAssignSheriff(game, targetId);
+    if (result) {
+      await this.saveGames();
+    }
+    return result;
   }
 
   // ================= 放逐投票相关方法 =================
@@ -429,5 +543,51 @@ export class GameService {
     this.votingSystem.executeExile(game, playerId);
     await this.saveGames();
     return true;
+  }
+
+  // ================= 机器人行为相关 =================
+
+  /**
+   * 执行机器人警长竞选上警
+   */
+  async executeBotSheriffSignup(gameId: string): Promise<void> {
+    const game = this.getGame(gameId);
+    if (!game) return;
+
+    await this.botService.executeBotSheriffSignup(game);
+    await this.saveGames();
+  }
+
+  /**
+   * 执行机器人警长竞选退水
+   */
+  async executeBotSheriffWithdraw(gameId: string): Promise<void> {
+    const game = this.getGame(gameId);
+    if (!game) return;
+
+    await this.botService.executeBotSheriffWithdraw(game);
+    await this.saveGames();
+  }
+
+  /**
+   * 执行机器人警长投票
+   */
+  async executeBotSheriffVote(gameId: string): Promise<void> {
+    const game = this.getGame(gameId);
+    if (!game) return;
+
+    await this.botService.executeBotSheriffVote(game);
+    await this.saveGames();
+  }
+
+  /**
+   * 执行机器人放逐投票
+   */
+  async executeBotExileVote(gameId: string): Promise<void> {
+    const game = this.getGame(gameId);
+    if (!game) return;
+
+    await this.botService.executeBotExileVote(game);
+    await this.saveGames();
   }
 }

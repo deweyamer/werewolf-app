@@ -1,8 +1,8 @@
-import { useState, useEffect, useMemo } from 'react';
+import { useState, useEffect, useCallback, useMemo } from 'react';
 import { useAuthStore } from '../stores/authStore';
 import { useGameStore } from '../stores/gameStore';
 import { wsService } from '../services/websocket';
-import { ScriptV2, ServerMessage } from '../../../shared/src/types';
+import { ScriptV2, ServerMessage, GameReplayData } from '../../../shared/src/types';
 import { ROLES } from '../../../shared/src/constants';
 import { config } from '../config';
 import {
@@ -12,47 +12,53 @@ import {
   getRoleStatusText
 } from '../utils/gameStats';
 import { getPhaseLabel, translateDeathReason, getRoleName } from '../utils/phaseLabels';
+import { useToast } from '../components/Toast';
+import { useGameSocket } from '../hooks/useGameSocket';
+import RoleSelector from '../components/RoleSelector';
+import MiniOverviewSidebar from '../components/god/MiniOverviewSidebar';
+import PlayerTableDrawer from '../components/god/PlayerTableDrawer';
+import GameReplayViewer from '../components/replay/GameReplayViewer';
+import RoomLobby from '../components/god/RoomLobby';
+import RoleAssignmentModal from '../components/god/RoleAssignmentModal';
+import SheriffElectionPanel from '../components/god/SheriffElectionPanel';
+import ExileVotePanel from '../components/god/ExileVotePanel';
+import NightActionsPanel from '../components/god/NightActionsPanel';
+import GameHistoryPanel from '../components/god/GameHistoryPanel';
+import { useReplayData } from '../hooks/useReplayData';
 
 export default function GodConsole() {
   const { user, token, clearAuth } = useAuthStore();
-  const { currentGame, setGame, clearGame } = useGameStore();
+  const toast = useToast();
+  const { currentGame, clearGame } = useGameStore();
   const [scripts, setScripts] = useState<ScriptV2[]>([]);
   const [selectedScript, setSelectedScript] = useState('');
   const [roomCode, setRoomCode] = useState('');
   const [showRoleAssignment, setShowRoleAssignment] = useState(false);
   const [roleAssignments, setRoleAssignments] = useState<{ [key: number]: string }>({});
   const [expandedRounds, setExpandedRounds] = useState<Set<number>>(new Set([1])); // 默认展开第1轮
+  const [showRoleSelector, setShowRoleSelector] = useState(false);
+  const [customScript, setCustomScript] = useState<ScriptV2 | null>(null);
+  const [isPlayerTableDrawerOpen, setIsPlayerTableDrawerOpen] = useState(false);
+  const [isReplayViewerOpen, setIsReplayViewerOpen] = useState(false);
+  const [replayData, setReplayData] = useState<GameReplayData | null>(null);
 
-  useEffect(() => {
-    loadScripts();
+  const { generateReplayData } = useReplayData(currentGame);
 
-    const unsubscribe = wsService.onMessage((message: ServerMessage) => {
-      switch (message.type) {
-        case 'ROOM_CREATED':
-          alert(`房间创建成功！房间码：${message.roomCode}`);
-          break;
-        case 'ROOM_JOINED':
-          setGame(message.game);
-          break;
-        case 'GAME_STATE_UPDATE':
-          setGame(message.game);
-          break;
-        case 'PLAYER_JOINED':
-          console.log('Player joined:', message.player);
-          if (currentGame) {
-            const updatedGame = { ...currentGame };
-            updatedGame.players = [...updatedGame.players, message.player];
-            setGame(updatedGame);
-          }
-          break;
-        case 'PHASE_CHANGED':
-          console.log('Phase changed:', message.phase);
-          break;
-      }
-    });
+  // 页面特定消息处理（通用消息由 useGameSocket 统一处理）
+  const handlePageMessage = useCallback((message: ServerMessage) => {
+    switch (message.type) {
+      case 'ROOM_CREATED':
+        toast(`房间创建成功！房间码：${message.roomCode}`, 'success', 5000);
+        break;
+      case 'PHASE_CHANGED':
+        console.log('Phase changed:', message.phase);
+        break;
+    }
+  }, [toast]);
 
-    return unsubscribe;
-  }, [currentGame, setGame]);
+  useGameSocket(handlePageMessage);
+
+  useEffect(() => { loadScripts(); }, []);
 
   const loadScripts = async () => {
     try {
@@ -71,23 +77,54 @@ export default function GodConsole() {
 
   const handleCreateRoom = () => {
     if (!selectedScript) {
-      alert('请选择剧本');
+      toast('请选择剧本', 'warning');
       return;
     }
     wsService.send({ type: 'CREATE_ROOM', scriptId: selectedScript });
   };
 
+  const handleCreateTestGame = () => {
+    if (!selectedScript) {
+      toast('请选择剧本', 'warning');
+      return;
+    }
+    wsService.send({ type: 'GOD_CREATE_TEST_GAME', scriptId: selectedScript });
+  };
+
   const handleJoinRoom = () => {
     if (!roomCode.trim()) {
-      alert('请输入房间码');
+      toast('请输入房间码', 'warning');
       return;
     }
     wsService.send({ type: 'JOIN_ROOM', roomCode: roomCode.trim().toUpperCase() });
   };
 
+  // 创建自定义剧本
+  const handleCreateCustomScript = (composition: { [roleId: string]: number }, playerCount: number) => {
+    // 生成临时剧本
+    const script: ScriptV2 = {
+      id: `custom-${Date.now()}`,
+      name: `${playerCount}人自定义剧本`,
+      description: '用户自定义的剧本配置',
+      playerCount,
+      roleComposition: composition,
+      difficulty: 'medium',
+      tags: ['自定义', `${playerCount}人`],
+      rules: '用户自定义配置',
+      createdAt: new Date().toISOString(),
+      updatedAt: new Date().toISOString(),
+    };
+
+    setCustomScript(script);
+    setShowRoleSelector(false);
+
+    // 发送创建房间请求（带自定义剧本）
+    wsService.send({ type: 'CREATE_ROOM_WITH_CUSTOM_SCRIPT', script });
+  };
+
   const handleRandomAssignRoles = () => {
     if (!currentGame || !currentScript || currentScriptRoles.length === 0) {
-      alert('无法随机分配：游戏或剧本信息缺失');
+      toast('无法随机分配：游戏或剧本信息缺失', 'error');
       return;
     }
 
@@ -101,7 +138,7 @@ export default function GodConsole() {
 
     // 验证角色池和玩家数量是否匹配
     if (rolePool.length !== currentGame.players.length) {
-      alert(`错误：角色数量(${rolePool.length})与玩家数量(${currentGame.players.length})不匹配！`);
+      toast(`错误：角色数量(${rolePool.length})与玩家数量(${currentGame.players.length})不匹配！`, 'error');
       return;
     }
 
@@ -121,7 +158,7 @@ export default function GodConsole() {
     });
 
     setRoleAssignments(newAssignments);
-    alert('角色已随机分配！请确认后点击"确认分配"');
+    toast('角色已随机分配！请确认后点击"确认分配"', 'success');
   };
 
   const handleAssignRoles = () => {
@@ -136,7 +173,7 @@ export default function GodConsole() {
       }));
 
     if (assignments.length !== currentGame.players.length) {
-      alert(`请为所有玩家分配角色！当前已分配 ${assignments.length}/${currentGame.players.length} 个角色`);
+      toast(`请为所有玩家分配角色！当前已分配 ${assignments.length}/${currentGame.players.length} 个角色`, 'warning');
       return;
     }
 
@@ -145,7 +182,7 @@ export default function GodConsole() {
       p => !roleAssignments[p.playerId]
     );
     if (missingPlayers.length > 0) {
-      alert(`以下玩家还未分配角色：${missingPlayers.map(p => `${p.playerId}号`).join(', ')}`);
+      toast(`以下玩家还未分配角色：${missingPlayers.map(p => `${p.playerId}号`).join(', ')}`, 'warning');
       return;
     }
 
@@ -228,6 +265,15 @@ export default function GodConsole() {
     setExpandedRounds(newExpanded);
   };
 
+  // 打开可视化复盘
+  const handleOpenReplayViewer = () => {
+    const data = generateReplayData();
+    if (data) {
+      setReplayData(data);
+      setIsReplayViewerOpen(true);
+    }
+  };
+
   // 导出复盘数据
   const handleExportReplay = () => {
     if (!currentGame) return;
@@ -278,7 +324,7 @@ export default function GodConsole() {
     document.body.removeChild(link);
     URL.revokeObjectURL(url);
 
-    alert('复盘数据已导出！');
+    toast('复盘数据已导出！', 'success');
   };
 
   return (
@@ -298,60 +344,17 @@ export default function GodConsole() {
         </div>
 
         {!currentGame ? (
-          <div className="bg-white/10 backdrop-blur-md rounded-2xl p-8 shadow-2xl border border-white/20">
-            <h2 className="text-2xl font-bold text-white mb-6">创建或加入房间</h2>
-
-            <div className="grid md:grid-cols-2 gap-8">
-              <div>
-                <h3 className="text-xl font-bold text-white mb-4">创建新房间</h3>
-                <div className="space-y-4">
-                  <div>
-                    <label className="block text-white text-sm font-medium mb-2">选择剧本</label>
-                    <select
-                      value={selectedScript}
-                      onChange={(e) => setSelectedScript(e.target.value)}
-                      className="w-full px-4 py-2 bg-white/5 border border-white/20 rounded-lg text-white"
-                    >
-                      {scripts.map((script) => (
-                        <option key={script.id} value={script.id} className="text-gray-900 bg-white">
-                          {script.name} ({script.playerCount}人)
-                        </option>
-                      ))}
-                    </select>
-                  </div>
-                  <button
-                    onClick={handleCreateRoom}
-                    className="w-full py-3 bg-green-600 hover:bg-green-700 text-white font-bold rounded-lg transition"
-                  >
-                    创建房间
-                  </button>
-                </div>
-              </div>
-
-              <div>
-                <h3 className="text-xl font-bold text-white mb-4">加入已有房间</h3>
-                <div className="space-y-4">
-                  <div>
-                    <label className="block text-white text-sm font-medium mb-2">房间码</label>
-                    <input
-                      type="text"
-                      value={roomCode}
-                      onChange={(e) => setRoomCode(e.target.value.toUpperCase())}
-                      className="w-full px-4 py-2 bg-white/5 border border-white/20 rounded-lg text-white uppercase"
-                      placeholder="输入6位房间码"
-                      maxLength={6}
-                    />
-                  </div>
-                  <button
-                    onClick={handleJoinRoom}
-                    className="w-full py-3 bg-blue-600 hover:bg-blue-700 text-white font-bold rounded-lg transition"
-                  >
-                    加入房间
-                  </button>
-                </div>
-              </div>
-            </div>
-          </div>
+          <RoomLobby
+            scripts={scripts}
+            selectedScript={selectedScript}
+            setSelectedScript={setSelectedScript}
+            onCreateRoom={handleCreateRoom}
+            onCreateTestGame={handleCreateTestGame}
+            onJoinRoom={handleJoinRoom}
+            roomCode={roomCode}
+            setRoomCode={setRoomCode}
+            onShowRoleSelector={() => setShowRoleSelector(true)}
+          />
         ) : (
           <div className="space-y-6">
             {/* 游戏房间信息和操作按钮 */}
@@ -362,7 +365,7 @@ export default function GodConsole() {
                     房间码: {currentGame.roomCode}
                   </h2>
                   <p className="text-gray-300">
-                    {currentGame.scriptName} | 状态: {currentGame.status === 'waiting' ? '等待中' : currentGame.status === 'running' ? '进行中' : '已结束'}
+                    {currentGame.scriptName} | 状态: {currentGame.status === 'waiting' ? '等待中' : currentGame.status === 'running' ? '进行中' : currentGame.status === 'paused' ? '已暂停' : '已结束'}
                   </p>
                 </div>
                 <div className="flex gap-4">
@@ -384,358 +387,106 @@ export default function GodConsole() {
                     </>
                   )}
                   {currentGame.status === 'running' && (
-                    <button
-                      onClick={handleAdvancePhase}
-                      className="px-4 py-2 bg-blue-600 hover:bg-blue-700 text-white rounded-lg transition"
-                    >
-                      进入下一阶段
-                    </button>
+                    <>
+                      <button
+                        onClick={handleAdvancePhase}
+                        className="px-4 py-2 bg-blue-600 hover:bg-blue-700 text-white rounded-lg transition"
+                      >
+                        进入下一阶段
+                      </button>
+                      <button
+                        onClick={() => wsService.send({ type: 'GOD_PAUSE_GAME' })}
+                        className="px-4 py-2 bg-yellow-600 hover:bg-yellow-700 text-white rounded-lg transition"
+                      >
+                        暂停游戏
+                      </button>
+                      <button
+                        onClick={() => {
+                          if (confirm('确定要强制结束游戏吗？此操作不可撤回。')) {
+                            wsService.send({ type: 'GOD_FORCE_END_GAME' });
+                          }
+                        }}
+                        className="px-4 py-2 bg-red-600 hover:bg-red-700 text-white rounded-lg transition"
+                      >
+                        强制结束
+                      </button>
+                    </>
                   )}
+                  {currentGame.status === 'paused' && (
+                    <>
+                      <button
+                        onClick={() => wsService.send({ type: 'GOD_RESUME_GAME' })}
+                        className="px-4 py-2 bg-green-600 hover:bg-green-700 text-white rounded-lg transition"
+                      >
+                        恢复游戏
+                      </button>
+                      <button
+                        onClick={() => {
+                          if (confirm('确定要强制结束游戏吗？此操作不可撤回。')) {
+                            wsService.send({ type: 'GOD_FORCE_END_GAME' });
+                          }
+                        }}
+                        className="px-4 py-2 bg-red-600 hover:bg-red-700 text-white rounded-lg transition"
+                      >
+                        强制结束
+                      </button>
+                    </>
+                  )}
+                  <button
+                    onClick={handleOpenReplayViewer}
+                    className="px-4 py-2 bg-purple-600 hover:bg-purple-700 text-white rounded-lg transition"
+                  >
+                    📊 可视化复盘
+                  </button>
                   <button
                     onClick={handleExportReplay}
                     className="px-4 py-2 bg-green-600 hover:bg-green-700 text-white rounded-lg transition"
                   >
-                    📥 导出复盘
+                    📥 导出JSON
                   </button>
                 </div>
               </div>
             </div>
 
-            {/* P0 Panel 1: 游戏概览统计 */}
-            {gameOverview && (
-              <div className="bg-white/10 backdrop-blur-md rounded-2xl p-8 shadow-2xl border border-white/20">
-                <h3 className="text-2xl font-bold text-white mb-6">📊 游戏概览</h3>
-                <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
-                  {/* 当前回合 */}
-                  <div className="p-4 bg-blue-600/20 border border-blue-500/50 rounded-lg">
-                    <div className="text-blue-300 text-sm mb-1">当前回合</div>
-                    <div className="text-3xl font-bold text-white">第 {gameOverview.currentRound} 轮</div>
-                    <div className="text-gray-300 text-sm mt-1">{getPhaseLabel(gameOverview.currentPhase)}</div>
-                  </div>
-
-                  {/* 存活狼人 */}
-                  <div className="p-4 bg-red-600/20 border border-red-500/50 rounded-lg">
-                    <div className="text-red-300 text-sm mb-1">存活狼人</div>
-                    <div className="text-3xl font-bold text-white">{gameOverview.aliveWolves} 人</div>
-                    <div className="text-gray-300 text-sm mt-1">已出局 {gameOverview.deadWolves} 人</div>
-                  </div>
-
-                  {/* 存活好人 */}
-                  <div className="p-4 bg-green-600/20 border border-green-500/50 rounded-lg">
-                    <div className="text-green-300 text-sm mb-1">存活好人</div>
-                    <div className="text-3xl font-bold text-white">{gameOverview.aliveGoods} 人</div>
-                    <div className="text-gray-300 text-sm mt-1">已出局 {gameOverview.deadGoods} 人</div>
-                  </div>
-
-                  {/* 游戏时长 */}
-                  <div className="p-4 bg-purple-600/20 border border-purple-500/50 rounded-lg">
-                    <div className="text-purple-300 text-sm mb-1">游戏时长</div>
-                    <div className="text-3xl font-bold text-white">
-                      {gameOverview.duration || '-'}
-                    </div>
-                    <div className="text-gray-300 text-sm mt-1">
-                      {gameOverview.winner === 'wolf' && '🐺 狼人胜利'}
-                      {gameOverview.winner === 'good' && '👥 好人胜利'}
-                      {!gameOverview.winner && '游戏进行中'}
+            {/* 游戏进行中：左右分栏布局 */}
+            {(currentGame.status === 'running' || currentGame.status === 'paused') && gameOverview ? (
+              <div className="flex flex-col lg:flex-row gap-6">
+                {/* 左侧：行动主区域 (70%) */}
+                <div className="flex-1 lg:flex-[7] space-y-4">
+                  {/* 当前阶段 */}
+                  <div className="bg-white/10 backdrop-blur-md rounded-2xl p-6 shadow-2xl border border-white/20">
+                    <div className="flex justify-between items-center">
+                      <h3 className="text-2xl font-bold text-white">
+                        当前阶段: {getPhaseLabel(currentGame.currentPhase)} | 第 {currentGame.currentRound} 回合
+                      </h3>
+                      {/* 警长信息显示 */}
+                      {currentGame.sheriffId > 0 && (
+                        <div className="flex items-center gap-2 px-4 py-2 bg-yellow-600/30 border border-yellow-500 rounded-lg">
+                          <span className="text-yellow-400 text-lg">警长:</span>
+                          <span className="text-white font-bold text-lg">{currentGame.sheriffId}号</span>
+                          <span className="text-gray-300 text-sm">
+                            ({currentGame.players.find(p => p.playerId === currentGame.sheriffId)?.username})
+                          </span>
+                        </div>
+                      )}
+                      {currentGame.sheriffBadgeState === 'destroyed' && (
+                        <div className="px-4 py-2 bg-gray-600/30 border border-gray-500 rounded-lg">
+                          <span className="text-gray-400">警徽已流失</span>
+                        </div>
+                      )}
                     </div>
                   </div>
-                </div>
-              </div>
-            )}
 
-            {/* P0 Panel 2: 玩家状态表格 */}
-            <div className="bg-white/10 backdrop-blur-md rounded-2xl p-8 shadow-2xl border border-white/20">
-              <h3 className="text-2xl font-bold text-white mb-6">👥 玩家状态</h3>
-              <div className="overflow-x-auto">
-                <table className="w-full text-left">
-                  <thead>
-                    <tr className="border-b border-white/20">
-                      <th className="pb-3 text-gray-300 font-semibold">号位</th>
-                      <th className="pb-3 text-gray-300 font-semibold">玩家名</th>
-                      <th className="pb-3 text-gray-300 font-semibold">角色</th>
-                      <th className="pb-3 text-gray-300 font-semibold">阵营</th>
-                      <th className="pb-3 text-gray-300 font-semibold">状态</th>
-                      <th className="pb-3 text-gray-300 font-semibold">技能次数</th>
-                      <th className="pb-3 text-gray-300 font-semibold">出局信息</th>
-                    </tr>
-                  </thead>
-                  <tbody>
-                    {playerStats.map((player) => (
-                      <tr
-                        key={player.playerId}
-                        className={`border-b border-white/10 ${
-                          !player.alive ? 'opacity-60' : ''
-                        }`}
-                      >
-                        <td className="py-3 text-white font-bold">
-                          {player.playerId}号
-                          {player.isSheriff && ' 🎖️'}
-                        </td>
-                        <td className="py-3 text-gray-300">{player.username}</td>
-                        <td className="py-3">
-                          <span
-                            className={`px-2 py-1 rounded text-sm ${
-                              player.camp === 'wolf'
-                                ? 'bg-red-600/30 text-red-300'
-                                : 'bg-blue-600/30 text-blue-300'
-                            }`}
-                          >
-                            {player.roleName}
-                          </span>
-                        </td>
-                        <td className="py-3">
-                          {player.role ? (
-                            <span
-                              className={`px-2 py-1 rounded text-sm font-bold ${
-                                player.camp === 'wolf'
-                                  ? 'bg-red-600/50 text-red-200'
-                                  : 'bg-green-600/50 text-green-200'
-                              }`}
-                            >
-                              {player.camp === 'wolf' ? '狼人' : '好人'}
-                            </span>
-                          ) : (
-                            <span className="px-2 py-1 rounded text-sm text-gray-400">
-                              未分配
-                            </span>
-                          )}
-                        </td>
-                        <td className="py-3">
-                          <span
-                            className={`px-2 py-1 rounded text-sm ${
-                              player.alive
-                                ? 'bg-green-600/30 text-green-300'
-                                : 'bg-gray-600/30 text-gray-400'
-                            }`}
-                          >
-                            {player.alive ? '✓ 存活' : '✗ 已出局'}
-                          </span>
-                        </td>
-                        <td className="py-3 text-gray-300">{player.actionCount} 次</td>
-                        <td className="py-3 text-gray-300">
-                          {!player.alive && player.outReasonText && (
-                            <div className="text-sm">
-                              <div>{player.outReasonText}</div>
-                              {player.deathRound && (
-                                <div className="text-gray-500 text-xs">
-                                  第 {player.deathRound} 回合
-                                </div>
-                              )}
-                            </div>
-                          )}
-                          {player.alive && '-'}
-                        </td>
-                      </tr>
-                    ))}
-                  </tbody>
-                </table>
-              </div>
-            </div>
+                  <SheriffElectionPanel currentGame={currentGame} />
 
-            {currentGame.status === 'running' && (
-              <>
-                {/* P0 Panel 3: 实时操作状态 */}
-                <div className="bg-white/10 backdrop-blur-md rounded-2xl p-8 shadow-2xl border border-white/20">
-                  <h3 className="text-2xl font-bold text-white mb-4">
-                    🎮 当前阶段: {getPhaseLabel(currentGame.currentPhase)} | 第 {currentGame.currentRound} 回合
-                  </h3>
+                  <ExileVotePanel currentGame={currentGame} />
 
                   {/* 实时操作状态 - 使用 nightActionsSummary */}
-                  <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4 mb-6">
-                    {/* 恐惧阶段 */}
-                    {nightActionsSummary.fear && (
-                      <div className="p-4 bg-purple-600/20 border border-purple-500/50 rounded-lg">
-                        <h4 className="text-white font-bold mb-2">🌙 噩梦之影 ({nightActionsSummary.fear.actorId}号)</h4>
-                        <div className="text-gray-300 text-sm">
-                          {nightActionsSummary.fear.submitted ? (
-                            <div className="text-green-400">
-                              ✅ 已选择: {nightActionsSummary.fear.targetId ? `${nightActionsSummary.fear.targetId}号` : '无目标'}
-                            </div>
-                          ) : (
-                            <div className="text-yellow-400">⏳ 等待操作...</div>
-                          )}
-                        </div>
-                      </div>
-                    )}
-
-                    {/* 摄梦人阶段 */}
-                    {nightActionsSummary.dream && (
-                      <div className="p-4 bg-blue-600/20 border border-blue-500/50 rounded-lg">
-                        <h4 className="text-white font-bold mb-2">💤 摄梦人 ({nightActionsSummary.dream.actorId}号)</h4>
-                        <div className="text-gray-300 text-sm">
-                          {nightActionsSummary.dream.submitted ? (
-                            <div className="text-green-400">
-                              ✅ 已摄梦: {nightActionsSummary.dream.targetId ? `${nightActionsSummary.dream.targetId}号` : '无目标'}
-                            </div>
-                          ) : (
-                            <div className="text-yellow-400">⏳ 等待操作...</div>
-                          )}
-                        </div>
-                      </div>
-                    )}
-
-                    {/* 石像鬼阶段 */}
-                    {nightActionsSummary.gargoyle && (
-                      <div className="p-4 bg-purple-600/20 border border-purple-500/50 rounded-lg">
-                        <h4 className="text-white font-bold mb-2">🗿 石像鬼 ({nightActionsSummary.gargoyle.actorId}号)</h4>
-                        <div className="text-gray-300 text-sm">
-                          {nightActionsSummary.gargoyle.submitted ? (
-                            <div className="text-green-400">
-                              ✅ 已查验: {nightActionsSummary.gargoyle.targetId ? `${nightActionsSummary.gargoyle.targetId}号` : '无目标'}
-                            </div>
-                          ) : (
-                            <div className="text-yellow-400">⏳ 等待操作...</div>
-                          )}
-                        </div>
-                      </div>
-                    )}
-
-                    {/* 守卫阶段 */}
-                    {nightActionsSummary.guard && (
-                      <div className="p-4 bg-blue-600/20 border border-blue-500/50 rounded-lg">
-                        <h4 className="text-white font-bold mb-2">🛡️ 守卫 ({nightActionsSummary.guard.actorId}号)</h4>
-                        <div className="text-gray-300 text-sm">
-                          {nightActionsSummary.guard.submitted ? (
-                            <div className="text-green-400">
-                              ✅ 已守护: {nightActionsSummary.guard.targetId ? `${nightActionsSummary.guard.targetId}号` : '无目标'}
-                            </div>
-                          ) : (
-                            <div className="text-yellow-400">⏳ 等待操作...</div>
-                          )}
-                        </div>
-                      </div>
-                    )}
-
-                    {/* 狼人阶段 */}
-                    {nightActionsSummary.wolf && (
-                      <div className="p-4 bg-red-600/20 border border-red-500/50 rounded-lg">
-                        <h4 className="text-white font-bold mb-2">🐺 狼人刀人</h4>
-                        <div className="text-gray-300 text-sm">
-                          {nightActionsSummary.wolf.submitted ? (
-                            <>
-                              <div className="text-green-400">
-                                ✅ 已刀: {nightActionsSummary.wolf.targetId ? `${nightActionsSummary.wolf.targetId}号` : '无目标'}
-                              </div>
-                              {nightActionsSummary.wolf.voters && nightActionsSummary.wolf.voters.length > 0 && (
-                                <div className="text-gray-400 text-xs mt-1">
-                                  投票: {nightActionsSummary.wolf.voters.join(', ')}号
-                                </div>
-                              )}
-                            </>
-                          ) : (
-                            <div className="text-yellow-400">⏳ 等待操作...</div>
-                          )}
-                        </div>
-                      </div>
-                    )}
-
-                    {/* 狼美人阶段 */}
-                    {nightActionsSummary.wolfBeauty && (
-                      <div className="p-4 bg-pink-600/20 border border-pink-500/50 rounded-lg">
-                        <h4 className="text-white font-bold mb-2">💃 狼美人 ({nightActionsSummary.wolfBeauty.actorId}号)</h4>
-                        <div className="text-gray-300 text-sm">
-                          {nightActionsSummary.wolfBeauty.submitted ? (
-                            <div className="text-green-400">
-                              ✅ 已魅惑: {nightActionsSummary.wolfBeauty.targetId ? `${nightActionsSummary.wolfBeauty.targetId}号` : '无目标'}
-                            </div>
-                          ) : (
-                            <div className="text-yellow-400">⏳ 等待操作...</div>
-                          )}
-                        </div>
-                      </div>
-                    )}
-
-                    {/* 女巫阶段 */}
-                    {nightActionsSummary.witch && (
-                      <div className="p-4 bg-green-600/20 border border-green-500/50 rounded-lg">
-                        <h4 className="text-white font-bold mb-2">🧪 女巫 ({nightActionsSummary.witch.actorId}号)</h4>
-                        <div className="text-gray-300 text-sm space-y-1">
-                          {nightActionsSummary.witch.victimId && (
-                            <div className="text-red-300">昨晚被刀: {nightActionsSummary.witch.victimId}号</div>
-                          )}
-                          {nightActionsSummary.witch.submitted ? (
-                            <>
-                              <div className="text-green-400">✅ 已操作</div>
-                              {nightActionsSummary.witch.action === 'save' && (
-                                <div className="text-blue-400">使用了解药</div>
-                              )}
-                              {nightActionsSummary.witch.action === 'poison' && (
-                                <div className="text-red-400">使用了毒药毒死 {nightActionsSummary.witch.targetId}号</div>
-                              )}
-                              {nightActionsSummary.witch.action === 'none' && (
-                                <div className="text-gray-400">不使用药水</div>
-                              )}
-                            </>
-                          ) : (
-                            <div className="text-yellow-400">⏳ 等待操作...</div>
-                          )}
-                        </div>
-                      </div>
-                    )}
-
-                    {/* 预言家阶段 */}
-                    {nightActionsSummary.seer && (
-                      <div className="p-4 bg-cyan-600/20 border border-cyan-500/50 rounded-lg">
-                        <h4 className="text-white font-bold mb-2">🔮 预言家 ({nightActionsSummary.seer.actorId}号)</h4>
-                        <div className="text-gray-300 text-sm">
-                          {nightActionsSummary.seer.submitted ? (
-                            <>
-                              <div className="text-green-400">✅ 已查验</div>
-                              {nightActionsSummary.seer.targetId && (
-                                <div>
-                                  查验 {nightActionsSummary.seer.targetId}号 →{' '}
-                                  <span className={nightActionsSummary.seer.result === 'wolf' ? 'text-red-400' : 'text-blue-400'}>
-                                    {nightActionsSummary.seer.result === 'wolf' ? '狼人' : '好人'}
-                                  </span>
-                                </div>
-                              )}
-                            </>
-                          ) : (
-                            <div className="text-yellow-400">⏳ 等待操作...</div>
-                          )}
-                        </div>
-                      </div>
-                    )}
-
-                    {/* 守墓人阶段 */}
-                    {nightActionsSummary.gravekeeper && (
-                      <div className="p-4 bg-gray-600/20 border border-gray-500/50 rounded-lg">
-                        <h4 className="text-white font-bold mb-2">⚰️ 守墓人 ({nightActionsSummary.gravekeeper.actorId}号)</h4>
-                        <div className="text-gray-300 text-sm">
-                          {/* 守墓人规则提示 */}
-                          <div className="text-yellow-400 text-xs mb-2">
-                            ⚠️ 守墓人只能验尸白天被投票放逐的玩家
-                          </div>
-                          {/* 显示可验尸的玩家列表 */}
-                          {(() => {
-                            const exiledPlayers = currentGame.players.filter(
-                              p => !p.alive && p.outReason === 'exile'
-                            );
-                            return exiledPlayers.length > 0 ? (
-                              <div className="text-gray-400 text-xs mb-2">
-                                可验尸: {exiledPlayers.map(p => `${p.playerId}号`).join(', ')}
-                              </div>
-                            ) : (
-                              <div className="text-gray-500 text-xs mb-2">
-                                可验尸: 无 (尚无被放逐的玩家)
-                              </div>
-                            );
-                          })()}
-                          {nightActionsSummary.gravekeeper.submitted ? (
-                            <div className="text-green-400">
-                              ✅ 已验尸: {nightActionsSummary.gravekeeper.targetId ? `${nightActionsSummary.gravekeeper.targetId}号` : '无目标'}
-                            </div>
-                          ) : (
-                            <div className="text-yellow-400">⏳ 等待操作...</div>
-                          )}
-                        </div>
-                      </div>
-                    )}
-                  </div>
+                  <NightActionsPanel currentGame={currentGame} nightActionsSummary={nightActionsSummary} />
 
                   {/* 神职技能状态 */}
-                  <div className="p-4 bg-white/5 rounded-lg">
-                    <h4 className="text-white font-bold mb-3">🎭 神职技能状态</h4>
+                  <div className="bg-white/10 backdrop-blur-md rounded-2xl p-6 shadow-2xl border border-white/20">
+                    <h4 className="text-xl font-bold text-white mb-4">神职技能状态</h4>
                     <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-3">
                       {playerStats.map((player) => {
                         const gamePlayer = currentGame.players.find(p => p.playerId === player.playerId);
@@ -752,50 +503,168 @@ export default function GodConsole() {
                     </div>
                   </div>
 
-                  {/* 操作历史（按回合分组） */}
-                  <h4 className="text-white font-bold mb-2">📜 游戏流程历史</h4>
-                  <div className="space-y-2 max-h-96 overflow-y-auto">
-                    {groupHistoryByRounds().map(({ round, logs }) => (
-                      <div key={round} className="border border-white/20 rounded-lg overflow-hidden">
-                        {/* 回合标题 */}
-                        <button
-                          onClick={() => toggleRound(round)}
-                          className="w-full flex justify-between items-center p-3 bg-blue-600/20 hover:bg-blue-600/30 transition"
-                        >
-                          <span className="text-white font-bold">
-                            {round === 0 ? '游戏准备' : `第 ${round} 回合`}
-                          </span>
-                          <span className="text-gray-300 text-sm">
-                            {expandedRounds.has(round) ? '▼' : '▶'} {logs.length} 条记录
-                          </span>
-                        </button>
+                  <GameHistoryPanel
+                    currentGame={currentGame}
+                    expandedRounds={expandedRounds}
+                    toggleRound={toggleRound}
+                  />
+                </div>
 
-                        {/* 回合详情 */}
-                        {expandedRounds.has(round) && (
-                          <div className="p-3 bg-white/5 space-y-2">
-                            {logs.map((log) => (
-                              <div
-                                key={log.id}
-                                className="text-sm p-2 bg-white/10 rounded border-l-4 border-blue-500"
-                              >
-                                <div className="flex justify-between items-start mb-1">
-                                  <span className="text-blue-300 font-medium">
-                                    {getPhaseLabel(log.phase)}
-                                  </span>
-                                  <span className="text-gray-400 text-xs">
-                                    {new Date(log.timestamp).toLocaleTimeString('zh-CN')}
-                                  </span>
-                                </div>
-                                <div className="text-gray-200">{log.result}</div>
-                              </div>
-                            ))}
-                          </div>
-                        )}
+                {/* 右侧：Mini概览 (30%) */}
+                <div className="w-full lg:w-72 lg:flex-shrink-0 order-first lg:order-last">
+                  <MiniOverviewSidebar
+                    gameOverview={gameOverview}
+                    playerStats={playerStats}
+                    onOpenDrawer={() => setIsPlayerTableDrawerOpen(true)}
+                  />
+                </div>
+              </div>
+            ) : (
+              /* 游戏等待中：保持原有的垂直布局 */
+              <>
+                {/* 游戏概览统计 */}
+                {gameOverview && (
+                  <div className="bg-white/10 backdrop-blur-md rounded-2xl p-8 shadow-2xl border border-white/20">
+                    <h3 className="text-2xl font-bold text-white mb-6">游戏概览</h3>
+                    <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
+                      {/* 当前回合 */}
+                      <div className="p-4 bg-blue-600/20 border border-blue-500/50 rounded-lg">
+                        <div className="text-blue-300 text-sm mb-1">当前回合</div>
+                        <div className="text-3xl font-bold text-white">第 {gameOverview.currentRound} 轮</div>
+                        <div className="text-gray-300 text-sm mt-1">{getPhaseLabel(gameOverview.currentPhase)}</div>
                       </div>
-                    ))}
-                    {currentGame.history.length === 0 && (
-                      <div className="text-gray-400 text-center py-4">暂无历史记录</div>
-                    )}
+
+                      {/* 存活狼人 */}
+                      <div className="p-4 bg-red-600/20 border border-red-500/50 rounded-lg">
+                        <div className="text-red-300 text-sm mb-1">存活狼人</div>
+                        <div className="text-3xl font-bold text-white">{gameOverview.aliveWolves} 人</div>
+                        <div className="text-gray-300 text-sm mt-1">已出局 {gameOverview.deadWolves} 人</div>
+                      </div>
+
+                      {/* 存活好人 */}
+                      <div className="p-4 bg-green-600/20 border border-green-500/50 rounded-lg">
+                        <div className="text-green-300 text-sm mb-1">存活好人</div>
+                        <div className="text-3xl font-bold text-white">{gameOverview.aliveGoods} 人</div>
+                        <div className="text-gray-300 text-sm mt-1">已出局 {gameOverview.deadGoods} 人</div>
+                      </div>
+
+                      {/* 游戏时长 */}
+                      <div className="p-4 bg-purple-600/20 border border-purple-500/50 rounded-lg">
+                        <div className="text-purple-300 text-sm mb-1">游戏时长</div>
+                        <div className="text-3xl font-bold text-white">
+                          {gameOverview.duration || '-'}
+                        </div>
+                        <div className="text-gray-300 text-sm mt-1">
+                          {gameOverview.winner === 'wolf' && '狼人胜利'}
+                          {gameOverview.winner === 'good' && '好人胜利'}
+                          {!gameOverview.winner && '游戏进行中'}
+                        </div>
+                      </div>
+                    </div>
+                  </div>
+                )}
+
+                {/* 玩家状态表格 */}
+                <div className="bg-white/10 backdrop-blur-md rounded-2xl p-8 shadow-2xl border border-white/20">
+                  <h3 className="text-2xl font-bold text-white mb-6">玩家状态</h3>
+                  <div className="overflow-x-auto">
+                    <table className="w-full text-left">
+                      <thead>
+                        <tr className="border-b border-white/20">
+                          <th className="pb-3 text-gray-300 font-semibold">号位</th>
+                          <th className="pb-3 text-gray-300 font-semibold">玩家名</th>
+                          <th className="pb-3 text-gray-300 font-semibold">角色</th>
+                          <th className="pb-3 text-gray-300 font-semibold">阵营</th>
+                          <th className="pb-3 text-gray-300 font-semibold">状态</th>
+                          <th className="pb-3 text-gray-300 font-semibold">技能次数</th>
+                          <th className="pb-3 text-gray-300 font-semibold">出局信息</th>
+                          <th className="pb-3 text-gray-300 font-semibold">操作</th>
+                        </tr>
+                      </thead>
+                      <tbody>
+                        {playerStats.map((player) => (
+                          <tr
+                            key={player.playerId}
+                            className={`border-b border-white/10 ${
+                              !player.alive ? 'opacity-60' : ''
+                            }`}
+                          >
+                            <td className="py-3 text-white font-bold">
+                              {player.playerId}号
+                              {player.isSheriff && ' 🎖️'}
+                            </td>
+                            <td className="py-3 text-gray-300">{player.username}</td>
+                            <td className="py-3">
+                              <span
+                                className={`px-2 py-1 rounded text-sm ${
+                                  player.camp === 'wolf'
+                                    ? 'bg-red-600/30 text-red-300'
+                                    : 'bg-blue-600/30 text-blue-300'
+                                }`}
+                              >
+                                {player.roleName}
+                              </span>
+                            </td>
+                            <td className="py-3">
+                              {player.role ? (
+                                <span
+                                  className={`px-2 py-1 rounded text-sm font-bold ${
+                                    player.camp === 'wolf'
+                                      ? 'bg-red-600/50 text-red-200'
+                                      : 'bg-green-600/50 text-green-200'
+                                  }`}
+                                >
+                                  {player.camp === 'wolf' ? '狼人' : '好人'}
+                                </span>
+                              ) : (
+                                <span className="px-2 py-1 rounded text-sm text-gray-400">
+                                  未分配
+                                </span>
+                              )}
+                            </td>
+                            <td className="py-3">
+                              <span
+                                className={`px-2 py-1 rounded text-sm ${
+                                  player.alive
+                                    ? 'bg-green-600/30 text-green-300'
+                                    : 'bg-gray-600/30 text-gray-400'
+                                }`}
+                              >
+                                {player.alive ? '存活' : '已出局'}
+                              </span>
+                            </td>
+                            <td className="py-3 text-gray-300">{player.actionCount} 次</td>
+                            <td className="py-3 text-gray-300">
+                              {!player.alive && player.outReasonText && (
+                                <div className="text-sm">
+                                  <div>{player.outReasonText}</div>
+                                  {player.deathRound && (
+                                    <div className="text-gray-500 text-xs">
+                                      第 {player.deathRound} 回合
+                                    </div>
+                                  )}
+                                </div>
+                              )}
+                              {player.alive && '-'}
+                            </td>
+                            <td className="py-3">
+                              {player.alive && (
+                                <button
+                                  onClick={() => {
+                                    if (confirm(`确定要踢出 ${player.playerId}号 ${player.username} 吗？`)) {
+                                      wsService.send({ type: 'GOD_KICK_PLAYER', playerId: player.playerId });
+                                    }
+                                  }}
+                                  className="px-3 py-1 bg-red-600/30 hover:bg-red-600/50 text-red-300 text-sm rounded transition"
+                                >
+                                  踢出
+                                </button>
+                              )}
+                            </td>
+                          </tr>
+                        ))}
+                      </tbody>
+                    </table>
                   </div>
                 </div>
               </>
@@ -803,71 +672,39 @@ export default function GodConsole() {
           </div>
         )}
 
-        {showRoleAssignment && currentGame && currentScript && currentScriptRoles.length > 0 && (
-          <div className="fixed inset-0 bg-black/50 flex items-center justify-center p-4 z-50">
-            <div className="bg-gray-900 rounded-2xl p-8 max-w-2xl w-full border border-white/20">
-              <div className="flex justify-between items-center mb-6">
-                <h3 className="text-2xl font-bold text-white">分配角色</h3>
-                <button
-                  onClick={handleRandomAssignRoles}
-                  className="px-4 py-2 bg-yellow-600 hover:bg-yellow-700 text-white rounded-lg transition"
-                >
-                  🎲 随机分配
-                </button>
-              </div>
-
-              <div className="mb-4 p-4 bg-blue-600/20 border border-blue-500/50 rounded-lg">
-                <h4 className="text-white font-bold mb-2">剧本配置：{currentScript?.name}</h4>
-                <div className="text-gray-200 text-sm space-y-1">
-                  {currentScriptRoles.map(role => (
-                    <div key={role.id} className="flex justify-between">
-                      <span>{role.name} x{role.count}</span>
-                      <span className={role.camp === 'wolf' ? 'text-red-300' : 'text-green-300'}>
-                        ({role.camp === 'wolf' ? '狼人' : '好人'})
-                      </span>
-                    </div>
-                  ))}
-                </div>
-              </div>
-
-              <div className="space-y-4 max-h-96 overflow-y-auto">
-                {[...currentGame.players].sort((a, b) => a.playerId - b.playerId).map((player) => (
-                  <div key={player.playerId} className="flex items-center gap-4">
-                    <div className="text-white w-32">{player.playerId}号 - {player.username}</div>
-                    <select
-                      value={roleAssignments[player.playerId] || ''}
-                      onChange={(e) =>
-                        setRoleAssignments({ ...roleAssignments, [player.playerId]: e.target.value })
-                      }
-                      className="flex-1 px-4 py-2 bg-white/5 border border-white/20 rounded-lg text-white"
-                    >
-                      <option value="" className="text-gray-900 bg-white">选择角色</option>
-                      {currentScriptRoles.map((role) => (
-                        <option key={role.id} value={role.id} className="text-gray-900 bg-white">
-                          {role.name} ({role.camp === 'wolf' ? '狼人' : '好人'})
-                        </option>
-                      ))}
-                    </select>
-                  </div>
-                ))}
-              </div>
-              <div className="flex gap-4 mt-6">
-                <button
-                  onClick={() => setShowRoleAssignment(false)}
-                  className="flex-1 py-2 bg-gray-600 hover:bg-gray-700 text-white rounded-lg transition"
-                >
-                  取消
-                </button>
-                <button
-                  onClick={handleAssignRoles}
-                  className="flex-1 py-2 bg-purple-600 hover:bg-purple-700 text-white rounded-lg transition"
-                >
-                  确认分配
-                </button>
-              </div>
-            </div>
-          </div>
+        {/* 自定义剧本选择器 */}
+        {showRoleSelector && (
+          <RoleSelector
+            onComplete={handleCreateCustomScript}
+            onCancel={() => setShowRoleSelector(false)}
+          />
         )}
+
+        <RoleAssignmentModal
+          show={showRoleAssignment}
+          onClose={() => setShowRoleAssignment(false)}
+          currentGame={currentGame!}
+          currentScript={currentScript}
+          currentScriptRoles={currentScriptRoles}
+          roleAssignments={roleAssignments}
+          setRoleAssignments={setRoleAssignments}
+          onRandomAssign={handleRandomAssignRoles}
+          onAssignRoles={handleAssignRoles}
+        />
+
+        {/* 玩家详细状态抽屉 */}
+        <PlayerTableDrawer
+          isOpen={isPlayerTableDrawerOpen}
+          onClose={() => setIsPlayerTableDrawerOpen(false)}
+          playerStats={playerStats}
+        />
+
+        {/* 可视化复盘组件 */}
+        <GameReplayViewer
+          isOpen={isReplayViewerOpen}
+          onClose={() => setIsReplayViewerOpen(false)}
+          replayData={replayData}
+        />
       </div>
     </div>
   );

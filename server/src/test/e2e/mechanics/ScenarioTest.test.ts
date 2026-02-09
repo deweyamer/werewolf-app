@@ -13,7 +13,7 @@ import {
   E2ETestConfig,
   TestRound,
   ScenarioBuilder,
-} from './E2ETestFramework.js';
+} from '../../helpers/E2ETestFramework.js';
 
 describe('E2E 场景化测试 - 特定机制验证', () => {
   let executor: E2ETestExecutor;
@@ -244,6 +244,7 @@ describe('E2E 场景化测试 - 特定机制验证', () => {
       const checkResult = await executor['gameService'].submitAction(game.id, {
         playerId: 1, // 石像鬼
         phase: game.currentPhase,
+        actionType: 'action',
         target: 6, // 查验预言家
         timestamp: new Date().toISOString(),
       });
@@ -338,8 +339,6 @@ describe('E2E 场景化测试 - 特定机制验证', () => {
         expectedDeaths: [9, 2],
       };
 
-      console.log('[DEBUG] Test: round1 keys before executeRound:', Object.keys(round1));
-      console.log('[DEBUG] Test: round1.dayVotes:', round1.dayVotes);
       await executor.executeRound(round1);
 
       // 继续淘汰其余狼人...

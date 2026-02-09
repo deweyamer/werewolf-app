@@ -28,6 +28,11 @@ export class WitchHandler extends BaseRoleHandler {
     const actionType = action.actionType; // 'none' | 'save' | 'poison'
     const target = action.target;
 
+    // 女巫已经提交过操作，不能再次提交（防止先毒再救的exploit）
+    if (game.nightActions.witchSubmitted && actionType !== 'none') {
+      return { success: false, message: '女巫本轮已提交操作，不能再次使用技能' };
+    }
+
     // 女巫知道被刀的人
     let victimInfo = game.nightActions.wolfKill;
     if (victimInfo && !game.nightActions.witchKnowsVictim) {
@@ -92,7 +97,7 @@ export class WitchHandler extends BaseRoleHandler {
       }
 
       // 不能同一晚又救又毒
-      if (actionType === 'poison' && game.nightActions.witchAction === 'save') {
+      if (game.nightActions.witchAction === 'save') {
         return { success: false, message: '不能同一晚又救又毒' };
       }
 

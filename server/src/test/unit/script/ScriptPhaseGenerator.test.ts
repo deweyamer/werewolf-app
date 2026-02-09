@@ -1,6 +1,6 @@
 import { describe, it, expect, beforeEach } from 'vitest';
-import { ScriptPhaseGenerator } from './ScriptPhaseGenerator.js';
-import { ScriptV2 } from './ScriptTypes.js';
+import { ScriptPhaseGenerator } from '../../../game/script/ScriptPhaseGenerator.js';
+import { ScriptV2 } from '../../../game/script/ScriptTypes.js';
 
 describe('ScriptPhaseGenerator', () => {
   let generator: ScriptPhaseGenerator;

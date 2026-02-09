@@ -3,9 +3,11 @@ import { useAuthStore } from '../stores/authStore';
 import { wsService } from '../services/websocket';
 import { User } from '../../../shared/src/types';
 import { config } from '../config';
+import { useToast } from '../components/Toast';
 
 export default function AdminDashboard() {
   const { user, token, clearAuth } = useAuthStore();
+  const toast = useToast();
   const [users, setUsers] = useState<Omit<User, 'passwordHash'>[]>([]);
   const [showCreateForm, setShowCreateForm] = useState(false);
   const [newUser, setNewUser] = useState({ username: '', password: '', role: 'player' as 'admin' | 'god' | 'player' });
@@ -46,11 +48,11 @@ export default function AdminDashboard() {
         setNewUser({ username: '', password: '', role: 'player' });
         loadUsers();
       } else {
-        alert(data.error);
+        toast(data.error, 'error');
       }
     } catch (err) {
       console.error('Failed to create user:', err);
-      alert('创建用户失败');
+      toast('创建用户失败', 'error');
     }
   };
 
@@ -69,7 +71,7 @@ export default function AdminDashboard() {
       }
     } catch (err) {
       console.error('Failed to delete user:', err);
-      alert('删除用户失败');
+      toast('删除用户失败', 'error');
     }
   };
 

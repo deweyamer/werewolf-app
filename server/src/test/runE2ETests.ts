@@ -13,7 +13,7 @@ import {
   TestRound,
   TestScenarios,
   ScenarioBuilder,
-} from './E2ETestFramework.js';
+} from './helpers/E2ETestFramework.js';
 import {
   TestRunner,
   TestPriority,

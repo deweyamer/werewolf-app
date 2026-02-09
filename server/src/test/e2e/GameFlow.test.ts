@@ -2,7 +2,7 @@ import { describe, it, expect, beforeEach } from 'vitest';
 import { ScriptService } from '../../services/ScriptService.js';
 import { GameService } from '../../services/GameService.js';
 import { Game, PlayerAction, GamePlayer } from '../../../../shared/src/types.js';
-import { RoleRegistry } from '../roles/RoleRegistry.js';
+import { RoleRegistry } from '../../game/roles/RoleRegistry.js';
 
 /**
  * 端到端游戏流程测试
@@ -262,8 +262,7 @@ describe('端到端游戏流程测试', () => {
       const dreamedPlayer = finalGame.players.find(p => p.playerId === 10)!;
 
       // 根据剧本规则，连续两晚梦到同一人会梦死
-      // 这里我们检查游戏日志或玩家状态
-      expect(finalGame.history.length).toBeGreaterThan(0);
+      expect(dreamedPlayer.alive).toBe(false);
     });
   });
 
@@ -473,12 +472,15 @@ describe('端到端游戏流程测试', () => {
       await advanceToPhase(game.id, 'settle');
       await gameService.advancePhase(game.id);
 
-      // 验证10号和狼美人形成连结
+      // 验证魅惑操作被记录
       const updatedGame = gameService.getGame(game.id)!;
       const charmedPlayer = updatedGame.players.find(p => p.playerId === 10)!;
 
-      // 检查是否有连结标记（具体实现可能不同）
-      expect(updatedGame.history.length).toBeGreaterThan(0);
+      // 验证狼美人魅惑操作被记录到历史日志
+      const beautyActionLog = updatedGame.history.find(
+        h => h.actorPlayerId === 4 && h.target === 10
+      );
+      expect(beautyActionLog).toBeDefined();
     });
 
     it('守卫不能连续守护同一人', async () => {
@@ -730,9 +732,8 @@ describe('端到端游戏流程测试', () => {
       const hunter = updatedGame.players.find(p => p.playerId === 8)!;
       expect(hunter.alive).toBe(false);
 
-      // 猎人应该能开枪（在白天结算阶段）
-      // 这里需要检查游戏日志或等待猎人开枪阶段
-      expect(updatedGame.history.length).toBeGreaterThan(0);
+      // 猎人被狼刀死亡
+      expect(hunter.outReason).toBe('wolf_kill');
     });
 
     it('预言家被恐惧后无法查验', async () => {

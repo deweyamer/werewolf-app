@@ -1,8 +1,8 @@
-import { ScriptV2 } from './ScriptTypes.js';
+import { ScriptV2, PlayerCountPreset } from './ScriptTypes.js';
 
 /**
  * 预设剧本库
- * 提供常见的12人局剧本配置
+ * 提供多种人数配置的剧本
  */
 export class ScriptPresets {
   /**
@@ -10,11 +10,353 @@ export class ScriptPresets {
    */
   static getAllPresets(): ScriptV2[] {
     return [
+      ScriptPresets.STANDARD_TWELVE_PLAYER_SCRIPT, // 标准12人测试剧本放在最前面
+      ScriptPresets.NINE_PLAYER_SCRIPT,
       ScriptPresets.DREAMER_SCRIPT,
       ScriptPresets.KNIGHT_BEAUTY_SCRIPT,
       ScriptPresets.GRAVEKEEPER_GARGOYLE_SCRIPT,
+      ScriptPresets.FIFTEEN_PLAYER_SCRIPT,
+      ScriptPresets.EIGHTEEN_PLAYER_SCRIPT,
     ];
   }
+
+  /**
+   * 获取人数预设配置
+   */
+  static getPlayerCountPresets(): PlayerCountPreset[] {
+    return [
+      {
+        playerCount: 9,
+        label: '9人标准局',
+        wolves: 3,
+        gods: 3,
+        villagers: 3,
+        description: '经典三狼局，策略丰富',
+        recommendedRoles: [
+          { roleId: 'wolf', count: 2, required: true },
+          { roleId: 'wolf_beauty', count: 1, required: false },
+          { roleId: 'seer', count: 1, required: false },
+          { roleId: 'witch', count: 1, required: false },
+          { roleId: 'hunter', count: 1, required: false },
+          { roleId: 'villager', count: 3, required: true },
+        ],
+      },
+      {
+        playerCount: 12,
+        label: '12人经典局',
+        wolves: 4,
+        gods: 4,
+        villagers: 4,
+        description: '最经典的狼人杀配置',
+        recommendedRoles: [
+          { roleId: 'wolf', count: 3, required: true },
+          { roleId: 'nightmare', count: 1, required: false },
+          { roleId: 'seer', count: 1, required: false },
+          { roleId: 'witch', count: 1, required: false },
+          { roleId: 'hunter', count: 1, required: false },
+          { roleId: 'dreamer', count: 1, required: false },
+          { roleId: 'villager', count: 4, required: true },
+        ],
+      },
+      {
+        playerCount: 15,
+        label: '15人大型局',
+        wolves: 5,
+        gods: 5,
+        villagers: 5,
+        description: '大型局，角色更丰富',
+        recommendedRoles: [
+          { roleId: 'wolf', count: 3, required: true },
+          { roleId: 'nightmare', count: 1, required: false },
+          { roleId: 'wolf_beauty', count: 1, required: false },
+          { roleId: 'seer', count: 1, required: false },
+          { roleId: 'witch', count: 1, required: false },
+          { roleId: 'hunter', count: 1, required: false },
+          { roleId: 'guard', count: 1, required: false },
+          { roleId: 'knight', count: 1, required: false },
+          { roleId: 'villager', count: 5, required: true },
+        ],
+      },
+      {
+        playerCount: 18,
+        label: '18人豪华局',
+        wolves: 6,
+        gods: 6,
+        villagers: 6,
+        description: '超大型局，需要经验玩家',
+        recommendedRoles: [
+          { roleId: 'wolf', count: 3, required: true },
+          { roleId: 'nightmare', count: 1, required: false },
+          { roleId: 'wolf_beauty', count: 1, required: false },
+          { roleId: 'white_wolf', count: 1, required: false },
+          { roleId: 'seer', count: 1, required: false },
+          { roleId: 'witch', count: 1, required: false },
+          { roleId: 'hunter', count: 1, required: false },
+          { roleId: 'guard', count: 1, required: false },
+          { roleId: 'dreamer', count: 1, required: false },
+          { roleId: 'knight', count: 1, required: false },
+          { roleId: 'villager', count: 6, required: true },
+        ],
+      },
+    ];
+  }
+
+  /**
+   * 标准12人剧本（预女猎守4狼4民）
+   * 用于一键测试的标准配置
+   */
+  static readonly STANDARD_TWELVE_PLAYER_SCRIPT: ScriptV2 = {
+    id: 'standard-twelve-player',
+    name: '12人标准剧本（预女猎守）',
+    description: '经典狼人杀配置：预言家、女巫、猎人、守卫 + 4狼人 + 4平民',
+    playerCount: 12,
+
+    roleComposition: {
+      wolf: 4,         // 4个普通狼人
+      seer: 1,         // 预言家
+      witch: 1,        // 女巫
+      hunter: 1,       // 猎人
+      guard: 1,        // 守卫
+      villager: 4,     // 4个平民
+    },
+
+    ruleVariants: {
+      skillInteractions: {
+        guardCanProtectSame: false, // 守卫不能连续守护同一人
+      },
+      winConditions: {
+        type: 'standard',
+      },
+    },
+
+    difficulty: 'medium',
+    tags: ['标准', '12人', '经典', '测试'],
+    rules: `
+## 剧本规则
+
+### 阵营配置
+- **狼人阵营（4人）**：4个普通狼人
+- **好人阵营（8人）**：预言家、女巫、猎人、守卫、4个平民
+
+### 角色技能
+- **预言家**：每晚可以查验一名玩家的阵营（狼人/好人）
+- **女巫**：有解药和毒药各一瓶，可以救人或毒人
+- **猎人**：死亡时可以开枪带走一名玩家
+- **守卫**：每晚可以守护一人，不能连续守护同一人
+
+### 胜利条件
+- **狼人胜利**：存活狼人数量 >= 存活好人数量
+- **好人胜利**：放逐所有狼人
+
+### 游戏流程
+1. 第一夜：守卫守护 → 狼人杀人 → 女巫救/毒 → 预言家查验
+2. 夜间结算后：警长竞选（仅第一轮）
+3. 白天：讨论 → 投票放逐
+4. 循环直到一方获胜
+`,
+
+    createdAt: new Date().toISOString(),
+    updatedAt: new Date().toISOString(),
+  };
+
+  /**
+   * 6人新手剧本
+   */
+  static readonly SIX_PLAYER_SCRIPT: ScriptV2 = {
+    id: 'six-player-beginner',
+    name: '6人新手剧本',
+    description: '适合新手的入门配置，快速体验狼人杀核心玩法',
+    playerCount: 6,
+
+    roleComposition: {
+      wolf: 2,         // 普通狼人
+      seer: 1,         // 预言家
+      witch: 1,        // 女巫
+      villager: 2,     // 平民
+    },
+
+    ruleVariants: {
+      winConditions: {
+        type: 'standard',
+      },
+    },
+
+    difficulty: 'easy',
+    tags: ['新手', '快速局', '6人'],
+    rules: `
+## 剧本规则
+
+### 阵营配置
+- **狼人阵营（2人）**：2个普通狼人
+- **好人阵营（4人）**：预言家、女巫、2个平民
+
+### 胜利条件
+- **狼人胜利**：屠杀所有好人
+- **好人胜利**：放逐所有狼人
+`,
+
+    createdAt: new Date().toISOString(),
+    updatedAt: new Date().toISOString(),
+  };
+
+  /**
+   * 9人标准剧本
+   */
+  static readonly NINE_PLAYER_SCRIPT: ScriptV2 = {
+    id: 'nine-player-standard',
+    name: '9人标准剧本',
+    description: '经典三狼配置，策略丰富',
+    playerCount: 9,
+
+    roleComposition: {
+      wolf: 2,         // 普通狼人
+      wolf_beauty: 1,  // 狼美人
+      seer: 1,         // 预言家
+      witch: 1,        // 女巫
+      hunter: 1,       // 猎人
+      villager: 3,     // 平民
+    },
+
+    ruleVariants: {
+      winConditions: {
+        type: 'standard',
+      },
+    },
+
+    difficulty: 'medium',
+    tags: ['标准', '9人', '狼美人'],
+    rules: `
+## 剧本规则
+
+### 阵营配置
+- **狼人阵营（3人）**：狼美人 + 2个普通狼人
+- **好人阵营（6人）**：预言家、女巫、猎人、3个平民
+
+### 特殊规则
+- 狼美人可以魅惑一名玩家，若狼美人死亡则目标连结死亡
+
+### 胜利条件
+- **狼人胜利**：屠杀所有好人
+- **好人胜利**：放逐所有狼人
+`,
+
+    createdAt: new Date().toISOString(),
+    updatedAt: new Date().toISOString(),
+  };
+
+  /**
+   * 15人大型剧本
+   */
+  static readonly FIFTEEN_PLAYER_SCRIPT: ScriptV2 = {
+    id: 'fifteen-player-advanced',
+    name: '15人大型剧本',
+    description: '大型局配置，角色丰富，策略多样',
+    playerCount: 15,
+
+    roleComposition: {
+      wolf: 3,         // 普通狼人
+      nightmare: 1,    // 噩梦之影
+      wolf_beauty: 1,  // 狼美人
+      seer: 1,         // 预言家
+      witch: 1,        // 女巫
+      hunter: 1,       // 猎人
+      guard: 1,        // 守卫
+      knight: 1,       // 骑士
+      villager: 5,     // 平民
+    },
+
+    ruleVariants: {
+      skillInteractions: {
+        guardCanProtectSame: false,
+        dreamerKillNights: 2,
+      },
+      winConditions: {
+        type: 'standard',
+      },
+    },
+
+    difficulty: 'hard',
+    tags: ['大型局', '15人', '高阶'],
+    rules: `
+## 剧本规则
+
+### 阵营配置
+- **狼人阵营（5人）**：噩梦之影、狼美人、3个普通狼人
+- **好人阵营（10人）**：预言家、女巫、猎人、守卫、骑士、5个平民
+
+### 特殊规则
+- 噩梦之影首晚可以恐惧一名玩家
+- 狼美人可以魅惑造成连结死亡
+- 守卫每晚守护一人，不可连续守护同一人
+- 骑士可以发起决斗
+
+### 胜利条件
+- **狼人胜利**：屠杀所有好人或屠杀所有神职
+- **好人胜利**：放逐所有狼人
+`,
+
+    createdAt: new Date().toISOString(),
+    updatedAt: new Date().toISOString(),
+  };
+
+  /**
+   * 18人豪华剧本
+   */
+  static readonly EIGHTEEN_PLAYER_SCRIPT: ScriptV2 = {
+    id: 'eighteen-player-premium',
+    name: '18人豪华剧本',
+    description: '超大型局，全角色体验，适合经验玩家',
+    playerCount: 18,
+
+    roleComposition: {
+      wolf: 3,         // 普通狼人
+      nightmare: 1,    // 噩梦之影
+      wolf_beauty: 1,  // 狼美人
+      white_wolf: 1,   // 白狼王
+      seer: 1,         // 预言家
+      witch: 1,        // 女巫
+      hunter: 1,       // 猎人
+      guard: 1,        // 守卫
+      dreamer: 1,      // 摄梦人
+      knight: 1,       // 骑士
+      villager: 6,     // 平民
+    },
+
+    ruleVariants: {
+      skillInteractions: {
+        guardCanProtectSame: false,
+        dreamerKillNights: 2,
+      },
+      winConditions: {
+        type: 'standard',
+      },
+    },
+
+    difficulty: 'hard',
+    tags: ['豪华局', '18人', '全角色'],
+    rules: `
+## 剧本规则
+
+### 阵营配置
+- **狼人阵营（6人）**：噩梦之影、狼美人、白狼王、3个普通狼人
+- **好人阵营（12人）**：预言家、女巫、猎人、守卫、摄梦人、骑士、6个平民
+
+### 特殊规则
+- 噩梦之影首晚可以恐惧一名玩家
+- 狼美人可以魅惑造成连结死亡
+- 白狼王是特殊狼人角色
+- 摄梦人连续两晚梦到同一人会导致目标梦死
+- 守卫每晚守护一人，不可连续守护同一人
+- 骑士可以发起决斗
+
+### 胜利条件
+- **狼人胜利**：屠杀所有好人或屠杀所有神职
+- **好人胜利**：放逐所有狼人
+`,
+
+    createdAt: new Date().toISOString(),
+    updatedAt: new Date().toISOString(),
+  };
 
   /**
    * 根据ID获取预设剧本

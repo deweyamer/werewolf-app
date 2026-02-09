@@ -2,8 +2,10 @@ import { useState } from 'react';
 import { useAuthStore } from '../stores/authStore';
 import { wsService } from '../services/websocket';
 import { config } from '../config';
+import { useToast } from '../components/Toast';
 
 export default function LoginPage() {
+  const toast = useToast();
   const [username, setUsername] = useState('');
   const [password, setPassword] = useState('');
   const [error, setError] = useState('');
@@ -26,7 +28,7 @@ export default function LoginPage() {
       const data = await response.json();
 
       if (data.success) {
-        alert('注册成功！请登录');
+        toast('注册成功！请登录', 'success');
         setIsRegisterMode(false);
         setPassword('');
       } else {

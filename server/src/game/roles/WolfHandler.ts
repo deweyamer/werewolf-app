@@ -1,10 +1,5 @@
 import { Game, PlayerAction, GamePlayer } from '../../../../shared/src/types.js';
 import { BaseRoleHandler, RoleActionResult } from './RoleHandler.js';
-import {
-  SkillEffectType,
-  SkillPriority,
-  SkillTiming,
-} from '../skill/SkillTypes.js';
 
 /**
  * 普通狼人Handler
@@ -48,26 +43,13 @@ export class WolfHandler extends BaseRoleHandler {
     // 使用最新投票的目标作为最终目标
     const finalTarget = target;
 
-    // 创建狼刀技能效果
-    const effect = this.createSkillEffect(
-      SkillEffectType.KILL,
-      SkillPriority.WOLF_KILL,
-      SkillTiming.NIGHT_ACTION,
-      action.playerId, // 代表狼人阵营
-      finalTarget,
-      {
-        message: `狼人决定刀${finalTarget}号`,
-      }
-    );
-
-    // 记录狼刀目标
+    // 记录狼刀目标（单一 KILL 效果由 GameFlowEngine 在夜间结算前统一创建）
     game.nightActions.wolfKill = finalTarget;
     game.nightActions.wolfSubmitted = true;
 
     return {
       success: true,
       message: `狼人集体决定刀${finalTarget}号`,
-      effect,
     };
   }
 

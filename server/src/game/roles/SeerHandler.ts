@@ -48,6 +48,11 @@ export class SeerHandler extends BaseRoleHandler {
     const targetPlayer = game.players.find(p => p.playerId === target)!;
     const checkResult = targetPlayer.camp;
 
+    // 更新nightActions，让上帝可以看到预言家的行动
+    game.nightActions.seerCheck = target;
+    game.nightActions.seerResult = checkResult;
+    game.nightActions.seerSubmitted = true;
+
     return {
       success: true,
       message: '查验成功',

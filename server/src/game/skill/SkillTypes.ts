@@ -46,7 +46,7 @@ export enum SkillEffectType {
   BLOCK = 'block',                    // 阻止技能使用
   CHECK = 'check',                    // 查验身份
   LINK = 'link',                      // 建立连结
-  IMMUNE = 'immune',                  // 免疫所有效果
+  DREAM_PROTECT = 'dream_protect',    // 摄梦人守护（免疫所有夜间伤害）
   EXPLODE = 'explode',                // 爆炸（黑狼王）
   SELF_DESTRUCT = 'self_destruct',   // 自爆（白狼王）
   DREAM_KILL = 'dream_kill',         // 梦死（摄梦人）
@@ -92,8 +92,8 @@ export interface PlayerState {
 
   // 正面状态（buff）
   protected: boolean;                 // 被守卫守护
-  gargoyleProtected: boolean;         // 被石像鬼守护（免疫所有）
   dreamProtected: boolean;            // 被摄梦人守护
+  savedByWitch: boolean;              // 被女巫解药救过
 
   // 连结关系
   linkedTo?: number;                  // 连结到哪个玩家（狼美人魅惑者）
@@ -122,6 +122,7 @@ export enum DeathReason {
   KNIGHT_DUEL = 'knight_duel',       // 骑士决斗
   WOLF_BEAUTY_LINK = 'wolf_beauty_link', // 狼美人连结死亡
   SELF_DESTRUCT = 'self_destruct',   // 白狼王自爆
+  GUARD_SAVE_CONFLICT = 'guard_save_conflict', // 同守同救（奶穿）
 }
 
 // ============================================

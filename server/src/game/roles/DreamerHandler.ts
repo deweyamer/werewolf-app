@@ -68,9 +68,9 @@ export class DreamerHandler extends BaseRoleHandler {
         effect,
       };
     } else {
-      // 第一晚或换了目标，守护该目标
+      // 第一晚或换了目标，守护该目标（摄梦人守护免疫所有夜间伤害）
       const effect = this.createSkillEffect(
-        SkillEffectType.PROTECT,
+        SkillEffectType.DREAM_PROTECT,
         SkillPriority.DREAM,
         SkillTiming.NIGHT_ACTION,
         action.playerId,

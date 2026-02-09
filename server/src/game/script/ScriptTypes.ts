@@ -53,7 +53,7 @@ export interface ScriptV2 {
   id: string;
   name: string;
   description: string;
-  playerCount: number;              // 固定12人
+  playerCount: number;              // 支持6-18人
 
   // 核心：角色组合（roleId -> 数量）
   roleComposition: {
@@ -110,4 +110,21 @@ export interface ScriptValidationResult {
 export interface ScriptWithPhases {
   script: ScriptV2;
   phases: PhaseConfig[];
+}
+
+/**
+ * 人数预设配置
+ */
+export interface PlayerCountPreset {
+  playerCount: number;
+  label: string;
+  wolves: number;
+  gods: number;
+  villagers: number;
+  description: string;
+  recommendedRoles: {
+    roleId: string;
+    count: number;
+    required: boolean;
+  }[];
 }

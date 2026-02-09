@@ -70,10 +70,10 @@ export class AuthService {
   private async ensureDefaultAdmin() {
     const adminExists = this.users.some(u => u.role === 'admin');
     if (!adminExists) {
-      const passwordHash = await bcrypt.hash('admin123', 10);
+      const passwordHash = await bcrypt.hash(process.env.ADMIN_PASSWORD || 'admin123', 10);
       const admin: User = {
         id: uuidv4(),
-        username: 'admin',
+        username: process.env.ADMIN_USERNAME || 'admin',
         passwordHash,
         role: 'admin',
         createdAt: new Date().toISOString(),
@@ -87,10 +87,10 @@ export class AuthService {
   private async ensureDefaultGod() {
     const godExists = this.users.some(u => u.username === 'god');
     if (!godExists) {
-      const passwordHash = await bcrypt.hash('god', 10);
+      const passwordHash = await bcrypt.hash(process.env.GOD_PASSWORD || 'god', 10);
       const god: User = {
         id: uuidv4(),
-        username: 'god',
+        username: process.env.GOD_USERNAME || 'god',
         passwordHash,
         role: 'god',
         createdAt: new Date().toISOString(),
@@ -107,7 +107,7 @@ export class AuthService {
       const username = `test${i}`;
       const exists = this.users.some(u => u.username === username);
       if (!exists) {
-        const passwordHash = await bcrypt.hash('test', 10);
+        const passwordHash = await bcrypt.hash(process.env.TEST_PLAYER_PASSWORD || 'test', 10);
         const player: User = {
           id: uuidv4(),
           username,

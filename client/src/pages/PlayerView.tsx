@@ -1,16 +1,22 @@
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useCallback } from 'react';
 import { useAuthStore } from '../stores/authStore';
 import { useGameStore } from '../stores/gameStore';
 import { wsService } from '../services/websocket';
 import { ServerMessage, GamePlayer } from '../../../shared/src/types';
+import { useToast } from '../components/Toast';
+import { getRoleName, getPhaseLabel } from '../utils/phaseLabels';
+import { useGameSocket } from '../hooks/useGameSocket';
+import RoleActionPanel from '../components/RoleActionPanel';
 
 export default function PlayerView() {
   const { user, clearAuth } = useAuthStore();
-  const { currentGame, setGame, clearGame } = useGameStore();
+  const { currentGame, clearGame } = useGameStore();
+  const toast = useToast();
   const [roomCode, setRoomCode] = useState('');
   const [selectedPlayerId, setSelectedPlayerId] = useState<number>(0);
   const [myPlayer, setMyPlayer] = useState<GamePlayer | null>(null);
   const [selectedTarget, setSelectedTarget] = useState<number>(0);
+  const [isSubmitting, setIsSubmitting] = useState(false);
 
   // 女巫专用状态
   const [witchAction, setWitchAction] = useState<'none' | 'antidote' | 'poison'>('none');
@@ -21,58 +27,42 @@ export default function PlayerView() {
   const [sheriffVote, setSheriffVote] = useState<number | 'skip'>(0);
   const [exileVote, setExileVote] = useState<number | 'skip'>(0);
 
-  useEffect(() => {
-    const unsubscribe = wsService.onMessage((message: ServerMessage) => {
-      switch (message.type) {
-        case 'ROOM_JOINED':
-          setGame(message.game);
-          break;
-        case 'PLAYER_JOINED':
-          // 有新玩家加入,更新玩家列表
-          if (currentGame) {
-            const updatedGame = { ...currentGame };
-            updatedGame.players = [...updatedGame.players, message.player];
-            setGame(updatedGame);
-          }
-          break;
-        case 'GAME_STATE_UPDATE':
-          setGame(message.game);
-          break;
-        case 'ROLE_ASSIGNED':
-          alert(`你的角色是: ${message.role} (${message.camp === 'wolf' ? '狼人阵营' : '好人阵营'})`);
-          break;
-        case 'PHASE_CHANGED':
-          alert(`进入新阶段: ${message.prompt}`);
-          break;
-        case 'GAME_FINISHED':
-          alert(`游戏结束！${message.winner === 'wolf' ? '狼人' : '好人'}获胜！`);
-          break;
-        case 'ACTION_RESULT':
-          if (message.success) {
-            // 如果有额外数据（如预言家查验结果），显示详细信息
-            if ((message as any).data?.seerResult) {
-              const seerInfo = (message as any).data.seerResult;
-              alert(`查验结果：${seerInfo.message}`);
-            } else if ((message as any).data?.victimInfo) {
-              // 女巫的被刀信息在UI中显示，不需要alert
-              // 受害者信息已经在女巫界面中显示
-            } else {
-              alert('操作成功');
-            }
-            setSelectedTarget(0);
-            // 重置女巫状态
-            setWitchAction('none');
-            setPoisonTarget(0);
-            setShowPoisonModal(false);
+  // 页面特定消息处理（通用消息由 useGameSocket 统一处理）
+  const handlePageMessage = useCallback((message: ServerMessage) => {
+    switch (message.type) {
+      case 'ROLE_ASSIGNED':
+        toast(`你的角色是: ${getRoleName(message.role)} (${message.camp === 'wolf' ? '狼人阵营' : '好人阵营'})`, 'info', 5000);
+        break;
+      case 'PHASE_CHANGED':
+        setIsSubmitting(false);
+        toast(`${getPhaseLabel(message.phase)}`, 'info');
+        break;
+      case 'GAME_FINISHED':
+        toast(`游戏结束！${message.winner === 'wolf' ? '狼人' : '好人'}获胜！`, 'info', 8000);
+        break;
+      case 'ACTION_RESULT':
+        setIsSubmitting(false);
+        if (message.success) {
+          if (message.data?.seerResult) {
+            const seerInfo = message.data.seerResult;
+            toast(`查验结果：${seerInfo.message}`, 'info', 6000);
+          } else if (message.data?.victimInfo) {
+            // 女巫的被刀信息在UI中显示，不需要toast
           } else {
-            alert(message.message);
+            toast('操作成功', 'success');
           }
-          break;
-      }
-    });
+          setSelectedTarget(0);
+          setWitchAction('none');
+          setPoisonTarget(0);
+          setShowPoisonModal(false);
+        } else {
+          toast(message.message, 'error');
+        }
+        break;
+    }
+  }, [toast]);
 
-    return unsubscribe;
-  }, [currentGame, setGame]);
+  useGameSocket(handlePageMessage);
 
   useEffect(() => {
     if (currentGame && user) {
@@ -83,7 +73,7 @@ export default function PlayerView() {
 
   const handleJoinRoom = () => {
     if (!roomCode.trim()) {
-      alert('请输入房间码');
+      toast('请输入房间码', 'warning');
       return;
     }
     wsService.send({
@@ -96,13 +86,15 @@ export default function PlayerView() {
   const handleLeaveRoom = () => {
     if (confirm('确定离开房间吗？')) {
       wsService.send({ type: 'LEAVE_ROOM' });
+      wsService.clearRoomCode();
       clearGame();
       setMyPlayer(null);
     }
   };
 
   const handleSubmitAction = () => {
-    if (!myPlayer || !currentGame) return;
+    if (!myPlayer || !currentGame || isSubmitting) return;
+    setIsSubmitting(true);
 
     const action = {
       phase: currentGame.currentPhase,
@@ -116,7 +108,8 @@ export default function PlayerView() {
 
   // 女巫提交操作
   const handleWitchSubmit = () => {
-    if (!myPlayer || !currentGame) return;
+    if (!myPlayer || !currentGame || isSubmitting) return;
+    setIsSubmitting(true);
 
     let actionType = 'none';
     let target = 0;
@@ -144,31 +137,10 @@ export default function PlayerView() {
     setShowPoisonModal(false);
   };
 
-  // 女巫选择解药
-  const handleUseAntidote = () => {
-    setWitchAction('antidote');
-  };
-
-  // 女巫选择不使用解药
-  const handleNoAntidote = () => {
-    setWitchAction('none');
-  };
-
-  // 女巫选择使用毒药
-  const handleUsePoisonClick = () => {
-    setWitchAction('poison');
-    setShowPoisonModal(true);
-  };
-
-  // 女巫选择不使用毒药
-  const handleNoPoison = () => {
-    setWitchAction('none');
-  };
-
   // 确认毒药目标
   const handleConfirmPoison = () => {
     if (poisonTarget === 0) {
-      alert('请选择毒药目标');
+      toast('请选择毒药目标', 'warning');
       return;
     }
     setShowPoisonModal(false);
@@ -186,12 +158,22 @@ export default function PlayerView() {
     }
   };
 
+  // 格式化投票目标用于确认提示
+  const formatVoteTarget = (target: number | 'skip') => {
+    if (target === 'skip') return '弃票';
+    const player = currentGame?.players.find(p => p.playerId === target);
+    return player ? `${target}号 ${player.username}` : `${target}号`;
+  };
+
   // 警长竞选:投票
   const handleSheriffVote = () => {
     if (sheriffVote === 0) {
-      alert('请选择要投票的候选人,或选择弃票');
+      toast('请选择要投票的候选人,或选择弃票', 'warning');
       return;
     }
+    if (isSubmitting) return;
+    if (!confirm(`确认投票给 ${formatVoteTarget(sheriffVote)} ？投票后不可更改。`)) return;
+    setIsSubmitting(true);
     wsService.send({ type: 'SHERIFF_VOTE', candidateId: sheriffVote });
     setSheriffVote(0);
   };
@@ -199,9 +181,12 @@ export default function PlayerView() {
   // 放逐投票
   const handleExileVote = () => {
     if (exileVote === 0) {
-      alert('请选择要投票的玩家,或选择弃票');
+      toast('请选择要投票的玩家,或选择弃票', 'warning');
       return;
     }
+    if (isSubmitting) return;
+    if (!confirm(`确认投票放逐 ${formatVoteTarget(exileVote)} ？投票后不可更改。`)) return;
+    setIsSubmitting(true);
     wsService.send({ type: 'EXILE_VOTE', targetId: exileVote });
     setExileVote(0);
   };
@@ -209,9 +194,12 @@ export default function PlayerView() {
   // 平票PK投票
   const handleExilePKVote = () => {
     if (exileVote === 0) {
-      alert('请选择要投票的玩家,或选择弃票');
+      toast('请选择要投票的玩家,或选择弃票', 'warning');
       return;
     }
+    if (isSubmitting) return;
+    if (!confirm(`确认投票放逐 ${formatVoteTarget(exileVote)} ？投票后不可更改。`)) return;
+    setIsSubmitting(true);
     wsService.send({ type: 'EXILE_PK_VOTE', targetId: exileVote });
     setExileVote(0);
   };
@@ -255,19 +243,28 @@ export default function PlayerView() {
               </div>
               <div>
                 <label className="block text-white text-sm font-medium mb-2">
-                  选择号位 <span className="text-gray-400">(可选，留空则自动分配)</span>
+                  选择号位 <span className="text-gray-400">(可选，点击选择或留空自动分配)</span>
                 </label>
-                <input
-                  type="number"
-                  value={selectedPlayerId || ''}
-                  onChange={(e) => setSelectedPlayerId(parseInt(e.target.value) || 0)}
-                  className="w-full px-4 py-2 bg-white/5 border border-white/20 rounded-lg text-white"
-                  placeholder="输入号位 (1-12)"
-                  min={1}
-                  max={12}
-                />
-                <p className="text-gray-400 text-xs mt-1">
-                  提示：选择你想要的号位，如果号位已被占用则加入失败
+                <div className="grid grid-cols-6 gap-2 mb-2">
+                  {Array.from({ length: 12 }, (_, i) => i + 1).map(seatId => (
+                    <button
+                      key={seatId}
+                      onClick={() => setSelectedPlayerId(selectedPlayerId === seatId ? 0 : seatId)}
+                      className={`p-2 rounded-lg text-sm font-bold transition border ${
+                        selectedPlayerId === seatId
+                          ? 'bg-blue-600 border-blue-400 text-white'
+                          : 'bg-white/5 border-white/20 text-gray-300 hover:bg-white/10'
+                      }`}
+                    >
+                      {seatId}号
+                    </button>
+                  ))}
+                </div>
+                <p className="text-gray-400 text-xs">
+                  {selectedPlayerId > 0
+                    ? `已选择 ${selectedPlayerId}号位，如果被占用则加入失败`
+                    : '未选择号位，将自动分配空闲位置'
+                  }
                 </p>
               </div>
               <button
@@ -296,17 +293,79 @@ export default function PlayerView() {
 
               {myPlayer && (
                 <div className="mb-6 p-4 bg-blue-600/20 border-2 border-blue-500 rounded-lg">
-                  <div className="text-white font-bold text-lg mb-2">
-                    你是 {myPlayer.playerId}号 {myPlayer.isSheriff && '🎖️'}
+                  <div className="flex items-center gap-3 mb-2">
+                    <div className="text-white font-bold text-lg">
+                      你是 {myPlayer.playerId}号
+                    </div>
+                    {myPlayer.isSheriff && (
+                      <span className="px-3 py-1 bg-yellow-600 text-white rounded-full text-sm font-bold">
+                        警长 (1.5票)
+                      </span>
+                    )}
                   </div>
                   {myPlayer.role && (
                     <div className="text-gray-300">
-                      角色: {myPlayer.role} | 阵营: {myPlayer.camp === 'wolf' ? '狼人' : '好人'}
+                      角色: {getRoleName(myPlayer.role)} | 阵营: {myPlayer.camp === 'wolf' ? '狼人' : '好人'}
                     </div>
                   )}
                   {!myPlayer.alive && (
                     <div className="text-red-400 mt-2">你已出局</div>
                   )}
+                </div>
+              )}
+
+              {/* 警长信息显示 */}
+              {currentGame.sheriffId > 0 && (
+                <div className="mb-6 p-4 bg-yellow-600/20 border border-yellow-500 rounded-lg">
+                  <div className="flex items-center gap-2">
+                    <span className="text-yellow-400">当前警长:</span>
+                    <span className="text-white font-bold">{currentGame.sheriffId}号</span>
+                    <span className="text-gray-300 text-sm">
+                      ({currentGame.players.find(p => p.playerId === currentGame.sheriffId)?.username})
+                    </span>
+                    {currentGame.sheriffId === myPlayer?.playerId && (
+                      <span className="text-yellow-400 text-sm ml-2">(你)</span>
+                    )}
+                  </div>
+                </div>
+              )}
+              {currentGame.sheriffBadgeState === 'destroyed' && (
+                <div className="mb-6 p-4 bg-gray-600/20 border border-gray-500 rounded-lg">
+                  <span className="text-gray-400">警徽已流失</span>
+                </div>
+              )}
+
+              {/* 警徽传递UI - 警长死亡后 */}
+              {currentGame.pendingSheriffTransfer?.fromPlayerId === myPlayer?.playerId &&
+               currentGame.pendingSheriffTransfer?.reason === 'death' && (
+                <div className="mb-6 bg-yellow-600/20 backdrop-blur-md rounded-2xl p-6 shadow-2xl border border-yellow-500">
+                  <h3 className="text-xl font-bold text-yellow-400 mb-4">
+                    警徽传递
+                  </h3>
+                  <p className="text-gray-300 mb-4">
+                    你已出局，请选择传递警徽给谁或撕毁警徽
+                  </p>
+                  <div className="grid grid-cols-3 gap-3 mb-4">
+                    {currentGame.pendingSheriffTransfer.options.map(playerId => {
+                      const player = currentGame.players.find(p => p.playerId === playerId);
+                      return (
+                        <button
+                          key={playerId}
+                          onClick={() => wsService.send({ type: 'SHERIFF_TRANSFER', targetId: playerId })}
+                          className="p-4 bg-yellow-600/30 hover:bg-yellow-600/50 border border-yellow-500 rounded-lg transition"
+                        >
+                          <div className="text-white font-bold">{playerId}号</div>
+                          <div className="text-gray-300 text-sm">{player?.username}</div>
+                        </button>
+                      );
+                    })}
+                  </div>
+                  <button
+                    onClick={() => wsService.send({ type: 'SHERIFF_TRANSFER', targetId: 'destroy' })}
+                    className="w-full py-3 bg-red-600 hover:bg-red-700 text-white font-bold rounded-lg transition"
+                  >
+                    撕毁警徽
+                  </button>
                 </div>
               )}
 
@@ -342,327 +401,72 @@ export default function PlayerView() {
             </div>
 
             {currentGame.status === 'running' && myPlayer?.alive && (
-              <>
-                {/* 平民和没有夜间行动的角色:夜间不显示操作界面 */}
-                {(myPlayer.role === '平民' || !myPlayer.abilities.hasNightAction) &&
-                 (currentGame.currentPhase === 'fear' || currentGame.currentPhase === 'dream' ||
-                  currentGame.currentPhase === 'wolf' || currentGame.currentPhase === 'witch' ||
-                  currentGame.currentPhase === 'seer') ? (
-                  <div className="bg-white/10 backdrop-blur-md rounded-2xl p-8 shadow-2xl border border-white/20 text-center">
-                    <h3 className="text-2xl font-bold text-white mb-4">🌙 夜晚阶段</h3>
-                    <p className="text-gray-300">天黑请闭眼,请等待其他角色行动...</p>
+              <RoleActionPanel
+                myPlayer={myPlayer}
+                currentGame={currentGame}
+                selectedTarget={selectedTarget}
+                setSelectedTarget={setSelectedTarget}
+                witchAction={witchAction}
+                setWitchAction={setWitchAction}
+                showPoisonModal={showPoisonModal}
+                setShowPoisonModal={setShowPoisonModal}
+                poisonTarget={poisonTarget}
+                setPoisonTarget={setPoisonTarget}
+                onSubmitAction={handleSubmitAction}
+                onWitchSubmit={handleWitchSubmit}
+                onConfirmPoison={handleConfirmPoison}
+                isSubmitting={isSubmitting}
+              />
+            )}
+
+            {/* 出局玩家观战模式 */}
+            {currentGame.status === 'running' && myPlayer && !myPlayer.alive && (
+              <div className="bg-white/10 backdrop-blur-md rounded-2xl p-8 shadow-2xl border border-white/20">
+                <div className="text-center mb-6">
+                  <div className="text-4xl mb-3">👻</div>
+                  <h3 className="text-2xl font-bold text-gray-400">观战模式</h3>
+                  <p className="text-gray-500 mt-2">你已出局，正在观战中</p>
+                </div>
+
+                {/* 当前阶段信息 */}
+                <div className="mb-6 p-4 bg-white/5 border border-white/10 rounded-lg">
+                  <div className="text-gray-400 text-sm mb-1">当前阶段</div>
+                  <div className="text-white font-bold text-lg">
+                    第 {currentGame.currentRound} 回合 - {getPhaseLabel(currentGame.currentPhase)}
                   </div>
-                ) : myPlayer.role === '噩梦之影' && currentGame.currentPhase === 'fear' ? (
-                  <div className="bg-white/10 backdrop-blur-md rounded-2xl p-8 shadow-2xl border border-white/20">
-                    <h3 className="text-xl font-bold text-white mb-4">
-                      🌙 恐惧阶段 - 噩梦之影
-                    </h3>
-                    <p className="text-gray-300 mb-6">选择一名玩家，让其陷入恐惧无法使用技能，或者选择放弃此次行动。</p>
+                </div>
 
-                    <div className="space-y-4">
-                      <div>
-                        <label className="block text-white text-sm font-medium mb-2">
-                          选择恐惧目标
-                        </label>
-                        <select
-                          value={selectedTarget}
-                          onChange={(e) => setSelectedTarget(Number(e.target.value))}
-                          className="w-full px-4 py-2 bg-gray-800 border border-purple-500/50 rounded-lg text-white focus:border-purple-500 focus:outline-none"
-                        >
-                          <option value={0} className="bg-gray-800 text-white">请选择目标...</option>
-                          {currentGame.players
-                            .filter((p) => p.alive && p.playerId !== myPlayer.playerId)
-                            .map((player) => (
-                              <option key={player.playerId} value={player.playerId} className="bg-gray-800 text-white">
-                                {player.playerId}号 - {player.username}
-                              </option>
-                            ))}
-                        </select>
-                      </div>
-                      <div className="flex gap-4">
-                        <button
-                          onClick={handleSubmitAction}
-                          disabled={selectedTarget === 0}
-                          className="flex-1 py-3 bg-purple-600 hover:bg-purple-700 disabled:bg-gray-600 disabled:cursor-not-allowed text-white font-bold rounded-lg transition"
-                        >
-                          确认恐惧
-                        </button>
-                        <button
-                          onClick={() => {
-                            setSelectedTarget(0);
-                            const action = {
-                              phase: currentGame.currentPhase,
-                              playerId: myPlayer.playerId,
-                              actionType: 'skip',
-                              target: 0,
-                            };
-                            wsService.send({ type: 'PLAYER_SUBMIT_ACTION', action });
-                          }}
-                          className="flex-1 py-3 bg-gray-600 hover:bg-gray-700 text-white font-bold rounded-lg transition"
-                        >
-                          放弃恐惧
-                        </button>
-                      </div>
-                    </div>
-                  </div>
-                ) : myPlayer.role === '女巫' && currentGame.currentPhase === 'witch' ? (
-                  <div className="bg-white/10 backdrop-blur-md rounded-2xl p-8 shadow-2xl border border-white/20">
-                    <h3 className="text-xl font-bold text-white mb-4">
-                      🧪 女巫阶段
-                    </h3>
-
-                    {/* 显示昨晚被刀的人 */}
-                    {currentGame.nightActions.witchKnowsVictim && (
-                      <div className="mb-6 p-4 bg-red-600/20 border border-red-500 rounded-lg">
-                        <p className="text-white font-bold">
-                          昨晚被刀: {currentGame.nightActions.witchKnowsVictim}号
-                        </p>
-                      </div>
-                    )}
-
-                    {/* 神职技能状态 */}
-                    <div className="mb-6 p-4 bg-white/5 rounded-lg">
-                      <h4 className="text-white font-bold mb-2">你的技能状态</h4>
-                      <div className="flex gap-4 text-sm">
-                        <div className={myPlayer.abilities.antidote ? 'text-green-400' : 'text-gray-500'}>
-                          解药 {myPlayer.abilities.antidote ? '✓ 可用' : '✗ 已使用'}
-                        </div>
-                        <div className={myPlayer.abilities.poison ? 'text-red-400' : 'text-gray-500'}>
-                          毒药 {myPlayer.abilities.poison ? '✓ 可用' : '✗ 已使用'}
-                        </div>
-                      </div>
-                    </div>
-
-                    {/* 解药选择 */}
-                    <div className="mb-6">
-                      <h4 className="text-white font-bold mb-3">💊 解药</h4>
-                      <div className="flex gap-4">
-                        <button
-                          onClick={handleUseAntidote}
-                          disabled={!myPlayer.abilities.antidote || witchAction === 'poison'}
-                          className={`flex-1 py-3 rounded-lg font-bold transition ${
-                            witchAction === 'antidote'
-                              ? 'bg-green-600 text-white'
-                              : myPlayer.abilities.antidote && witchAction !== 'poison'
-                                ? 'bg-green-600/30 hover:bg-green-600/50 text-white'
-                                : 'bg-gray-600/30 text-gray-500 cursor-not-allowed'
-                          }`}
-                        >
-                          使用解药
-                        </button>
-                        <button
-                          onClick={handleNoAntidote}
-                          disabled={witchAction === 'poison'}
-                          className={`flex-1 py-3 rounded-lg font-bold transition ${
-                            witchAction === 'none'
-                              ? 'bg-gray-600 text-white'
-                              : witchAction !== 'poison'
-                                ? 'bg-gray-600/30 hover:bg-gray-600/50 text-white'
-                                : 'bg-gray-600/30 text-gray-500 cursor-not-allowed'
-                          }`}
-                        >
-                          不使用
-                        </button>
-                      </div>
-                    </div>
-
-                    {/* 毒药选择 */}
-                    <div className="mb-6">
-                      <h4 className="text-white font-bold mb-3">☠️ 毒药</h4>
-                      <div className="flex gap-4">
-                        <button
-                          onClick={handleUsePoisonClick}
-                          disabled={!myPlayer.abilities.poison || witchAction === 'antidote'}
-                          className={`flex-1 py-3 rounded-lg font-bold transition ${
-                            witchAction === 'poison'
-                              ? 'bg-red-600 text-white'
-                              : myPlayer.abilities.poison && witchAction !== 'antidote'
-                                ? 'bg-red-600/30 hover:bg-red-600/50 text-white'
-                                : 'bg-gray-600/30 text-gray-500 cursor-not-allowed'
-                          }`}
-                        >
-                          使用毒药
-                        </button>
-                        <button
-                          onClick={handleNoPoison}
-                          disabled={witchAction === 'antidote'}
-                          className={`flex-1 py-3 rounded-lg font-bold transition ${
-                            witchAction === 'none'
-                              ? 'bg-gray-600 text-white'
-                              : witchAction !== 'antidote'
-                                ? 'bg-gray-600/30 hover:bg-gray-600/50 text-white'
-                                : 'bg-gray-600/30 text-gray-500 cursor-not-allowed'
-                          }`}
-                        >
-                          不使用
-                        </button>
-                      </div>
-                    </div>
-
-                    {/* 提交按钮 */}
-                    <button
-                      onClick={handleWitchSubmit}
-                      className="w-full py-3 bg-purple-600 hover:bg-purple-700 text-white font-bold rounded-lg transition"
-                    >
-                      提交操作
-                    </button>
-
-                    {/* 毒药目标选择弹窗 */}
-                    {showPoisonModal && (
-                      <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50">
-                        <div className="bg-gray-900 border-2 border-red-500 rounded-2xl p-8 max-w-md w-full mx-4">
-                          <h3 className="text-2xl font-bold text-white mb-4">选择毒药目标</h3>
-                          <div className="mb-6">
-                            <label className="block text-white text-sm font-medium mb-2">
-                              选择要毒死的玩家
-                            </label>
-                            <select
-                              value={poisonTarget}
-                              onChange={(e) => setPoisonTarget(Number(e.target.value))}
-                              className="w-full px-4 py-3 bg-gray-800 border border-red-500/50 rounded-lg text-white focus:border-red-500 focus:outline-none"
-                            >
-                              <option value={0} className="bg-gray-800 text-white">请选择...</option>
-                              {currentGame.players
-                                .filter((p) => p.alive)
-                                .map((player) => (
-                                  <option key={player.playerId} value={player.playerId} className="bg-gray-800 text-white">
-                                    {player.playerId}号 - {player.username}
-                                  </option>
-                                ))}
-                            </select>
-                          </div>
-                          <div className="flex gap-4">
-                            <button
-                              onClick={handleConfirmPoison}
-                              className="flex-1 py-3 bg-red-600 hover:bg-red-700 text-white font-bold rounded-lg transition"
-                            >
-                              确认
-                            </button>
-                            <button
-                              onClick={() => {
-                                setShowPoisonModal(false);
-                                setWitchAction('none');
-                                setPoisonTarget(0);
-                              }}
-                              className="flex-1 py-3 bg-gray-600 hover:bg-gray-700 text-white font-bold rounded-lg transition"
-                            >
-                              取消
-                            </button>
-                          </div>
-                        </div>
-                      </div>
-                    )}
-                  </div>
-                ) : myPlayer.role === '摄梦人' && currentGame.currentPhase === 'dream' ? (
-                  <div className="bg-white/10 backdrop-blur-md rounded-2xl p-8 shadow-2xl border border-white/20">
-                    <h3 className="text-xl font-bold text-white mb-4">
-                      🌙 梦游阶段 - 摄梦人
-                    </h3>
-                    <p className="text-gray-300 mb-6">
-                      选择一名玩家进行梦游。连续2晚梦游同一人会将其梦死,否则守护该玩家。
-                    </p>
-
-                    {myPlayer.abilities.lastDreamTarget && (
-                      <div className="mb-4 p-3 bg-blue-600/20 border border-blue-500 rounded-lg">
-                        <p className="text-blue-300 text-sm">
-                          💤 上一晚梦游了 {myPlayer.abilities.lastDreamTarget}号
-                        </p>
-                      </div>
-                    )}
-
-                    <div className="space-y-4">
-                      <div>
-                        <label className="block text-white text-sm font-medium mb-2">
-                          选择梦游目标
-                        </label>
-                        <select
-                          value={selectedTarget}
-                          onChange={(e) => setSelectedTarget(Number(e.target.value))}
-                          className="w-full px-4 py-2 bg-gray-800 border border-blue-500/50 rounded-lg text-white focus:border-blue-500 focus:outline-none"
-                        >
-                          <option value={0} className="bg-gray-800 text-white">请选择目标...</option>
-                          {currentGame.players
-                            .filter((p) => p.alive && p.playerId !== myPlayer.playerId)
-                            .map((player) => (
-                              <option key={player.playerId} value={player.playerId} className="bg-gray-800 text-white">
-                                {player.playerId}号 - {player.username}
-                              </option>
-                            ))}
-                        </select>
-                      </div>
-                      <button
-                        onClick={handleSubmitAction}
-                        disabled={selectedTarget === 0}
-                        className="w-full py-3 bg-blue-600 hover:bg-blue-700 disabled:bg-gray-600 disabled:cursor-not-allowed text-white font-bold rounded-lg transition"
+                {/* 存活玩家列表 */}
+                <div className="mb-6">
+                  <h4 className="text-white font-bold mb-3">
+                    存活玩家 ({currentGame.players.filter(p => p.alive).length}/{currentGame.players.length})
+                  </h4>
+                  <div className="grid grid-cols-4 gap-2">
+                    {currentGame.players.map((p) => (
+                      <div
+                        key={p.playerId}
+                        className={`p-2 rounded-lg text-center text-sm ${
+                          p.alive
+                            ? 'bg-green-600/20 border border-green-500/50 text-white'
+                            : 'bg-gray-600/20 border border-gray-500/30 text-gray-500 line-through'
+                        }`}
                       >
-                        确认梦游
-                      </button>
-                    </div>
-                  </div>
-                ) : (
-                  /* 其他角色通用操作界面 */
-                  <div className="bg-white/10 backdrop-blur-md rounded-2xl p-8 shadow-2xl border border-white/20">
-                    <h3 className="text-xl font-bold text-white mb-4">
-                      当前阶段: {currentGame.currentPhase}
-                    </h3>
-
-                    {/* 狼人阶段：显示所有狼人 */}
-                    {myPlayer.camp === 'wolf' && currentGame.currentPhase === 'wolf' && (
-                      <div className="mb-6 p-4 bg-red-600/20 border border-red-500 rounded-lg">
-                        <h4 className="text-white font-bold mb-3">🐺 狼人队友</h4>
-                        <div className="grid grid-cols-2 gap-2">
-                          {currentGame.players
-                            .filter((p) => p.camp === 'wolf' && p.alive)
-                            .map((wolf) => (
-                              <div
-                                key={wolf.playerId}
-                                className={`p-3 rounded-lg ${
-                                  wolf.playerId === myPlayer.playerId
-                                    ? 'bg-red-700/50 border-2 border-red-400'
-                                    : 'bg-red-600/30'
-                                }`}
-                              >
-                                <div className="text-white font-bold">
-                                  {wolf.playerId}号
-                                  {wolf.playerId === myPlayer.playerId && ' (你)'}
-                                </div>
-                                <div className="text-gray-300 text-sm">{wolf.username}</div>
-                              </div>
-                            ))}
-                        </div>
+                        <div className="font-bold">{p.playerId}号</div>
+                        <div className="text-xs truncate">{p.username}</div>
+                        {p.isSheriff && <div className="text-yellow-400 text-xs">警长</div>}
                       </div>
-                    )}
-
-                    <div className="space-y-4">
-                      <div>
-                        <label className="block text-white text-sm font-medium mb-2">
-                          选择目标
-                        </label>
-                        <select
-                          value={selectedTarget}
-                          onChange={(e) => setSelectedTarget(Number(e.target.value))}
-                          className="w-full px-4 py-2 bg-gray-800 border border-white/30 rounded-lg text-white focus:border-blue-500 focus:outline-none"
-                        >
-                          <option value={0} className="bg-gray-800 text-white">无</option>
-                          {currentGame.players
-                            .filter((p) => p.alive && p.playerId !== myPlayer.playerId)
-                            .map((player) => (
-                              <option key={player.playerId} value={player.playerId} className="bg-gray-800 text-white">
-                                {player.playerId}号 - {player.username}
-                              </option>
-                            ))}
-                        </select>
-                      </div>
-                      <button
-                        onClick={handleSubmitAction}
-                        className="w-full py-3 bg-purple-600 hover:bg-purple-700 text-white font-bold rounded-lg transition"
-                      >
-                        提交操作
-                      </button>
-                    </div>
+                    ))}
                   </div>
-                )}
-              </>
+                </div>
+
+                {/* 你的角色信息回顾 */}
+                <div className="p-4 bg-gray-600/20 border border-gray-500/30 rounded-lg">
+                  <div className="text-gray-400 text-sm mb-1">你的身份</div>
+                  <div className="text-gray-300">
+                    {myPlayer.playerId}号 - {getRoleName(myPlayer.role)} ({myPlayer.camp === 'wolf' ? '狼人阵营' : '好人阵营'})
+                  </div>
+                </div>
+              </div>
             )}
 
             {/* 警长竞选UI */}
@@ -781,9 +585,10 @@ export default function PlayerView() {
 
                         <button
                           onClick={handleSheriffVote}
-                          className="w-full py-3 bg-yellow-600 hover:bg-yellow-700 text-white font-bold rounded-lg transition"
+                          disabled={isSubmitting}
+                          className="w-full py-3 bg-yellow-600 hover:bg-yellow-700 disabled:bg-gray-600 disabled:cursor-not-allowed text-white font-bold rounded-lg transition"
                         >
-                          确认投票
+                          {isSubmitting ? '提交中...' : '确认投票'}
                         </button>
                       </div>
                     )}
@@ -837,9 +642,10 @@ export default function PlayerView() {
 
                         <button
                           onClick={handleExileVote}
-                          className="w-full py-3 bg-red-600 hover:bg-red-700 text-white font-bold rounded-lg transition"
+                          disabled={isSubmitting}
+                          className="w-full py-3 bg-red-600 hover:bg-red-700 disabled:bg-gray-600 disabled:cursor-not-allowed text-white font-bold rounded-lg transition"
                         >
-                          确认投票
+                          {isSubmitting ? '提交中...' : '确认投票'}
                         </button>
                       </div>
                     )}
@@ -894,9 +700,10 @@ export default function PlayerView() {
 
                         <button
                           onClick={handleExilePKVote}
-                          className="w-full py-3 bg-red-600 hover:bg-red-700 text-white font-bold rounded-lg transition"
+                          disabled={isSubmitting}
+                          className="w-full py-3 bg-red-600 hover:bg-red-700 disabled:bg-gray-600 disabled:cursor-not-allowed text-white font-bold rounded-lg transition"
                         >
-                          确认投票
+                          {isSubmitting ? '提交中...' : '确认投票'}
                         </button>
                       </div>
                     )}

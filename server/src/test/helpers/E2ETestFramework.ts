@@ -8,10 +8,10 @@
  * 4. 提供测试DSL，让测试易读易写
  */
 
-import { ScriptService } from '../services/ScriptService.js';
-import { GameService } from '../services/GameService.js';
-import { Game, PlayerAction, GamePlayer } from '../../../shared/src/types.js';
-import { RoleRegistry } from '../game/roles/RoleRegistry.js';
+import { ScriptService } from '../../services/ScriptService.js';
+import { GameService } from '../../services/GameService.js';
+import { Game, PlayerAction, GamePlayer } from '../../../../shared/src/types.js';
+import { RoleRegistry } from '../../game/roles/RoleRegistry.js';
 
 // ==================== 测试配置 ====================
 
@@ -125,8 +125,6 @@ export class E2ETestExecutor {
    * 执行一个回合的测试
    */
   async executeRound(round: TestRound): Promise<void> {
-    console.log('[DEBUG] executeRound START: round keys:', Object.keys(round));
-    console.log('[DEBUG] executeRound START: dayVotes:', round.dayVotes);
     if (!this.game) {
       throw new Error('游戏未初始化，请先调用 setupGame');
     }
@@ -161,11 +159,7 @@ export class E2ETestExecutor {
     }
 
     // ===== 白天阶段 =====
-    console.log(`[DEBUG] executeRound: round object keys:`, Object.keys(round));
-    console.log(`[DEBUG] executeRound: dayVotes value:`, round.dayVotes);
-    console.log(`[DEBUG] executeRound: dayVotes exists? ${!!round.dayVotes}, length: ${round.dayVotes?.length}`);
     if (round.dayVotes) {
-      console.log('[DEBUG] executeRound: Calling executeDayPhase');
       await this.executeDayPhase(round.dayVotes);
     } else {
       // 如果没有指定投票，快速跳过白天
@@ -235,7 +229,6 @@ export class E2ETestExecutor {
    * 执行白天阶段（讨论 + 投票）
    */
   private async executeDayPhase(votes: DayAction[]): Promise<void> {
-    console.log(`[DEBUG] executeDayPhase called with ${votes.length} votes`);
     if (!this.game) return;
 
     // 讨论阶段
@@ -253,17 +246,15 @@ export class E2ETestExecutor {
 
     // 刷新游戏状态
     this.game = this.gameService.getGame(this.game!.id)!;
-    console.log(`[DEBUG] executeDayPhase: currentPhase after advanceToPhase('vote') = ${this.game.currentPhase}`);
-
     // 提交投票
     for (const vote of votes) {
       const voteAction: PlayerAction = {
         playerId: vote.playerId,
         phase: this.game!.currentPhase,
+        actionType: 'action',
         target: vote.target,
         timestamp: new Date().toISOString(),
       };
-      console.log(`[DEBUG] Submitting vote: player ${vote.playerId} -> ${vote.target}, phase=${this.game.currentPhase}`);
       await this.gameService.submitAction(this.game!.id, voteAction);
     }
 

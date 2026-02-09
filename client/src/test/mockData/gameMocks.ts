@@ -3,7 +3,7 @@
  * 提供各种游戏状态的模拟数据
  */
 
-import { Game, GamePlayer } from '../../../../shared/src/types';
+import { Game, GamePlayer, UserSession } from '../../../../shared/src/types';
 
 /**
  * 创建一个基础的测试游戏对象
@@ -165,5 +165,158 @@ export function createFinishedGameGoodWin(): Game {
     currentPhase: 'finished',
     winner: 'good',
     finishedAt: '2024-01-01T01:00:00.000Z',
+  });
+}
+
+// ===== 用户会话工厂 =====
+
+export function createMockUserSession(overrides?: Partial<UserSession>): UserSession {
+  return {
+    userId: 'player-user-1',
+    username: 'TestPlayer',
+    role: 'player',
+    ...overrides,
+  } as UserSession;
+}
+
+export function createMockGodSession(): UserSession {
+  return {
+    userId: 'god-user-1',
+    username: 'GodPlayer',
+    role: 'god',
+  } as UserSession;
+}
+
+export function createMockAdminSession(): UserSession {
+  return {
+    userId: 'admin-user-1',
+    username: 'AdminUser',
+    role: 'admin',
+  } as UserSession;
+}
+
+// ===== 特定阶段游戏工厂 =====
+
+/**
+ * 女巫阶段游戏 - 有解药和毒药
+ */
+export function createWitchPhaseGame(): Game {
+  return createMockGame({
+    status: 'running',
+    currentPhase: 'witch',
+    players: [
+      createMockPlayer({
+        playerId: 1,
+        userId: 'player-user-1',
+        username: 'WitchPlayer',
+        role: 'witch',
+        camp: 'good',
+        abilities: { antidote: true, poison: true, hasNightAction: true },
+      }),
+      createMockPlayer({ playerId: 2, username: 'Player2', role: 'wolf', camp: 'wolf' }),
+      createMockPlayer({ playerId: 3, username: 'Player3', role: 'villager', camp: 'good' }),
+      createMockPlayer({ playerId: 4, username: 'Player4', role: 'villager', camp: 'good' }),
+      createMockPlayer({ playerId: 5, username: 'Player5', role: 'villager', camp: 'good' }),
+    ],
+    nightActions: {
+      witchKnowsVictim: 5,
+    },
+  });
+}
+
+/**
+ * 狼人阶段游戏 - 有多个狼人队友
+ */
+export function createWolfPhaseGame(): Game {
+  return createMockGame({
+    status: 'running',
+    currentPhase: 'wolf',
+    players: [
+      createMockPlayer({
+        playerId: 1,
+        userId: 'player-user-1',
+        username: 'WolfPlayer',
+        role: 'wolf',
+        camp: 'wolf',
+        abilities: { hasNightAction: true },
+      }),
+      createMockPlayer({ playerId: 2, username: 'WolfMate', role: 'nightmare', camp: 'wolf' }),
+      createMockPlayer({ playerId: 3, username: 'GoodGuy1', role: 'seer', camp: 'good' }),
+      createMockPlayer({ playerId: 4, username: 'GoodGuy2', role: 'villager', camp: 'good' }),
+      createMockPlayer({ playerId: 5, username: 'GoodGuy3', role: 'villager', camp: 'good' }),
+    ],
+  });
+}
+
+/**
+ * 预言家阶段游戏
+ */
+export function createSeerPhaseGame(): Game {
+  return createMockGame({
+    status: 'running',
+    currentPhase: 'seer',
+    players: [
+      createMockPlayer({
+        playerId: 1,
+        userId: 'player-user-1',
+        username: 'SeerPlayer',
+        role: 'seer',
+        camp: 'good',
+        abilities: { hasNightAction: true },
+      }),
+      createMockPlayer({ playerId: 2, username: 'Player2', role: 'wolf', camp: 'wolf' }),
+      createMockPlayer({ playerId: 3, username: 'Player3', role: 'villager', camp: 'good' }),
+    ],
+  });
+}
+
+/**
+ * 噩梦之影阶段游戏
+ */
+export function createNightmarePhaseGame(): Game {
+  return createMockGame({
+    status: 'running',
+    currentPhase: 'fear',
+    players: [
+      createMockPlayer({
+        playerId: 1,
+        userId: 'player-user-1',
+        username: 'NightmarePlayer',
+        role: 'nightmare',
+        camp: 'wolf',
+        abilities: { hasNightAction: true },
+      }),
+      createMockPlayer({ playerId: 2, username: 'Player2', role: 'seer', camp: 'good' }),
+      createMockPlayer({ playerId: 3, username: 'Player3', role: 'villager', camp: 'good' }),
+    ],
+  });
+}
+
+/**
+ * 警长竞选游戏（可配置阶段）
+ */
+export function createSheriffElectionGame(phase: 'signup' | 'campaign' | 'voting' | 'done' = 'signup'): Game {
+  const players = [
+    createMockPlayer({ playerId: 1, userId: 'player-user-1', username: 'Player1', role: 'seer', camp: 'good' }),
+    createMockPlayer({ playerId: 2, username: 'Player2', role: 'wolf', camp: 'wolf' }),
+    createMockPlayer({ playerId: 3, username: 'Player3', role: 'villager', camp: 'good' }),
+    createMockPlayer({ playerId: 4, username: 'Player4', role: 'villager', camp: 'good' }),
+  ];
+
+  const sheriffElection: any = {
+    phase,
+    candidates: phase !== 'signup' ? [1, 3] : [],
+    withdrawn: [],
+    votes: phase === 'voting' ? {} : {},
+  };
+  if (phase === 'done') {
+    sheriffElection.result = 1;
+  }
+
+  return createMockGame({
+    status: 'running',
+    currentPhase: 'sheriffElection',
+    players,
+    sheriffElection,
   });
 }

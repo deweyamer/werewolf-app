@@ -235,4 +235,31 @@ export class ScriptService {
 
     return this.phaseGenerator.getNightActionRoles(script.roleComposition);
   }
+
+  /**
+   * 注册临时自定义剧本（用于即时创建房间，不保存到文件）
+   * 返回剧本ID，如果验证失败则返回null
+   */
+  registerCustomScript(scriptData: ScriptV2): string | null {
+    // 验证剧本
+    const validationResult = this.validator.validate(scriptData);
+    if (!validationResult.valid) {
+      console.error('[Custom Script] 验证失败:', validationResult.errors);
+      return null;
+    }
+
+    // 确保ID唯一
+    const script: ScriptV2 = {
+      ...scriptData,
+      id: `custom-${Date.now()}-${Math.random().toString(36).substr(2, 9)}`,
+      createdAt: new Date().toISOString(),
+      updatedAt: new Date().toISOString(),
+    };
+
+    // 添加到内存中（不保存到文件）
+    this.scripts.push(script);
+
+    console.log(`[Custom Script] 注册临时剧本: ${script.id} (${script.playerCount}人)`);
+    return script.id;
+  }
 }

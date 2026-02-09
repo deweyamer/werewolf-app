@@ -8,16 +8,9 @@ expect.extend(matchers);
 // Cleanup after each test
 afterEach(() => {
   cleanup();
+  // Reset confirm mock if set
+  vi.restoreAllMocks();
 });
-
-// Mock WebSocket
-global.WebSocket = vi.fn(() => ({
-  addEventListener: vi.fn(),
-  removeEventListener: vi.fn(),
-  send: vi.fn(),
-  close: vi.fn(),
-  readyState: 1,
-})) as any;
 
 // Mock window.matchMedia
 Object.defineProperty(window, 'matchMedia', {

@@ -19,9 +19,10 @@ export class SocketManager {
     gameService: GameService,
     scriptService: ScriptService
   ) {
+    const corsOrigin = process.env.CORS_ORIGIN || '*';
     this.io = new SocketIOServer(httpServer, {
       cors: {
-        origin: '*',
+        origin: corsOrigin,
         methods: ['GET', 'POST'],
       },
     });
@@ -45,6 +46,11 @@ export class SocketManager {
 
       socket.on('message', async (message: ClientMessage) => {
         try {
+          // 验证消息基本结构
+          if (!message || typeof message !== 'object' || !message.type || typeof message.type !== 'string') {
+            send({ type: 'ERROR', message: '无效的消息格式' });
+            return;
+          }
           await this.handleMessage(socket, message, send);
         } catch (error) {
           console.error('Error handling message:', error);
@@ -89,12 +95,20 @@ export class SocketManager {
         await this.handleCreateRoom(socket, message.scriptId, send);
         break;
 
+      case 'CREATE_ROOM_WITH_CUSTOM_SCRIPT':
+        await this.handleCreateRoomWithCustomScript(socket, message.script, send);
+        break;
+
       case 'JOIN_ROOM':
         await this.handleJoinRoom(socket, message.roomCode, send, message.playerId);
         break;
 
       case 'LEAVE_ROOM':
         await this.handleLeaveRoom(socket, send);
+        break;
+
+      case 'GOD_CREATE_TEST_GAME':
+        await this.handleCreateTestGame(socket, message.scriptId, send);
         break;
 
       case 'GOD_ASSIGN_ROLES':
@@ -133,6 +147,26 @@ export class SocketManager {
         await this.handleExilePKVote(socket, message.targetId, send);
         break;
 
+      case 'SHERIFF_TRANSFER':
+        await this.handleSheriffTransfer(socket, message.targetId, send);
+        break;
+
+      case 'GOD_ASSIGN_SHERIFF':
+        await this.handleGodAssignSheriff(socket, message.targetId, send);
+        break;
+
+      case 'GOD_SHERIFF_START_CAMPAIGN':
+        await this.handleGodSheriffStartCampaign(socket, send);
+        break;
+
+      case 'GOD_SHERIFF_START_VOTING':
+        await this.handleGodSheriffStartVoting(socket, send);
+        break;
+
+      case 'GOD_SHERIFF_TALLY_VOTES':
+        await this.handleGodSheriffTallyVotes(socket, send);
+        break;
+
       default:
         send({ type: 'ERROR', message: '未知的消息类型' });
     }
@@ -166,6 +200,57 @@ export class SocketManager {
     socket.join(game.id);
     send({ type: 'ROOM_CREATED', roomCode: game.roomCode, gameId: game.id });
     send({ type: 'GAME_STATE_UPDATE', game });
+  }
+
+  /**
+   * 使用自定义剧本创建房间
+   */
+  private async handleCreateRoomWithCustomScript(socket: Socket, script: any, send: (msg: ServerMessage) => void) {
+    const user = this.socketUsers.get(socket.id);
+    if (!user || user.role !== 'god') {
+      send({ type: 'ERROR', message: '需要上帝权限' });
+      return;
+    }
+
+    // 注册临时剧本
+    const scriptId = this.scriptService.registerCustomScript(script);
+    if (!scriptId) {
+      send({ type: 'ERROR', message: '剧本配置无效' });
+      return;
+    }
+
+    const game = await this.gameService.createGame(user.userId, user.username, scriptId);
+    if (!game) {
+      send({ type: 'ERROR', message: '创建房间失败' });
+      return;
+    }
+
+    socket.join(game.id);
+    send({ type: 'ROOM_CREATED', roomCode: game.roomCode, gameId: game.id });
+    send({ type: 'GAME_STATE_UPDATE', game });
+    console.log(`[Custom] God ${user.username} 创建了自定义剧本游戏: ${game.roomCode} (${script.playerCount}人)`);
+  }
+
+  /**
+   * 创建测试游戏（带机器人玩家）
+   */
+  private async handleCreateTestGame(socket: Socket, scriptId: string, send: (msg: ServerMessage) => void) {
+    const user = this.socketUsers.get(socket.id);
+    if (!user || user.role !== 'god') {
+      send({ type: 'ERROR', message: '需要上帝权限' });
+      return;
+    }
+
+    const game = await this.gameService.createTestGame(user.userId, user.username, scriptId);
+    if (!game) {
+      send({ type: 'ERROR', message: '创建测试游戏失败' });
+      return;
+    }
+
+    socket.join(game.id);
+    send({ type: 'ROOM_CREATED', roomCode: game.roomCode, gameId: game.id });
+    send({ type: 'GAME_STATE_UPDATE', game });
+    console.log(`[Test] God ${user.username} 创建了测试游戏: ${game.roomCode}`);
   }
 
   private async handleJoinRoom(socket: Socket, roomCode: string, send: (msg: ServerMessage) => void, requestedPlayerId?: number) {
@@ -366,8 +451,38 @@ export class SocketManager {
       return;
     }
 
-    const updatedGame = this.gameService.getGame(game.id);
+    let updatedGame = this.gameService.getGame(game.id);
     if (!updatedGame) return;
+
+    // 如果进入警长竞选阶段且有机器人，执行机器人上警
+    if (result.nextPhase === 'sheriffElection' && updatedGame.hasBot) {
+      await this.gameService.executeBotSheriffSignup(game.id);
+      updatedGame = this.gameService.getGame(game.id);
+      if (!updatedGame) return;
+
+      // 广播警长竞选状态
+      if (updatedGame.sheriffElection) {
+        this.io.to(game.id).emit('message', {
+          type: 'SHERIFF_ELECTION_UPDATE',
+          state: updatedGame.sheriffElection
+        } as ServerMessage);
+      }
+    }
+
+    // 如果进入投票阶段且有机器人，执行机器人放逐投票
+    if (result.nextPhase === 'vote' && updatedGame.hasBot) {
+      await this.gameService.executeBotExileVote(game.id);
+      updatedGame = this.gameService.getGame(game.id);
+      if (!updatedGame) return;
+
+      // 广播放逐投票状态
+      if (updatedGame.exileVote) {
+        this.io.to(game.id).emit('message', {
+          type: 'EXILE_VOTE_UPDATE',
+          state: updatedGame.exileVote
+        } as ServerMessage);
+      }
+    }
 
     this.io.to(game.id).emit('message', { type: 'GAME_STATE_UPDATE', game: updatedGame } as ServerMessage);
     this.io.to(game.id).emit('message', {
@@ -395,6 +510,12 @@ export class SocketManager {
       return;
     }
 
+    // 验证 action 基本结构
+    if (!action || typeof action.playerId !== 'number' || typeof action.actionType !== 'string') {
+      send({ type: 'ERROR', message: '无效的操作数据' });
+      return;
+    }
+
     const rooms = Array.from(socket.rooms);
     const gameRoom = rooms.find(r => r !== socket.id);
     if (!gameRoom) {
@@ -406,6 +527,19 @@ export class SocketManager {
     if (!game) {
       send({ type: 'ERROR', message: '游戏不存在' });
       return;
+    }
+
+    // 验证 playerId 归属：确保操作者是该玩家本人（上帝可代替任意玩家操作）
+    const player = game.players.find(p => p.userId === user.userId);
+    if (user.role !== 'god') {
+      if (!player) {
+        send({ type: 'ERROR', message: '你不是该游戏的玩家' });
+        return;
+      }
+      if (player.playerId !== action.playerId) {
+        send({ type: 'ERROR', message: '不能代替其他玩家操作' });
+        return;
+      }
     }
 
     const result = await this.gameService.submitAction(game.id, action);
@@ -665,6 +799,321 @@ export class SocketManager {
       send({ type: 'ACTION_RESULT', success: true, message: 'PK投票成功' });
     } else {
       send({ type: 'ERROR', message: 'PK投票失败' });
+    }
+  }
+
+  // ================= 警徽传递处理 =================
+
+  private async handleSheriffTransfer(
+    socket: Socket,
+    targetId: number | 'destroy',
+    send: (msg: ServerMessage) => void
+  ) {
+    const user = this.socketUsers.get(socket.id);
+    if (!user) {
+      send({ type: 'ERROR', message: '需要先认证' });
+      return;
+    }
+
+    const rooms = Array.from(socket.rooms);
+    const gameRoom = rooms.find(r => r !== socket.id);
+    if (!gameRoom) {
+      send({ type: 'ERROR', message: '未加入房间' });
+      return;
+    }
+
+    const game = this.gameService.getGame(gameRoom);
+    if (!game) {
+      send({ type: 'ERROR', message: '游戏不存在' });
+      return;
+    }
+
+    const player = game.players.find(p => p.userId === user.userId);
+    if (!player || !game.pendingSheriffTransfer ||
+        game.pendingSheriffTransfer.fromPlayerId !== player.playerId) {
+      send({ type: 'ERROR', message: '你不是当前警长或无需传递警徽' });
+      return;
+    }
+
+    let success: boolean;
+    let reason: string;
+
+    if (targetId === 'destroy') {
+      success = await this.gameService.destroySheriffBadge(game.id);
+      reason = '警徽已撕毁';
+    } else {
+      success = await this.gameService.transferSheriffBadge(game.id, targetId);
+      reason = `警徽传递给${targetId}号`;
+    }
+
+    if (success) {
+      const updatedGame = this.gameService.getGame(game.id);
+      if (updatedGame) {
+        this.io.to(game.id).emit('message', {
+          type: 'GAME_STATE_UPDATE',
+          game: updatedGame
+        } as ServerMessage);
+        this.io.to(game.id).emit('message', {
+          type: 'SHERIFF_BADGE_UPDATE',
+          sheriffId: updatedGame.sheriffId,
+          state: updatedGame.sheriffBadgeState || 'normal',
+          reason,
+        } as ServerMessage);
+      }
+      send({ type: 'ACTION_RESULT', success: true, message: reason });
+    } else {
+      send({ type: 'ERROR', message: '操作失败' });
+    }
+  }
+
+  // ================= 上帝指定警长处理 =================
+
+  private async handleGodAssignSheriff(
+    socket: Socket,
+    targetId: number | 'none',
+    send: (msg: ServerMessage) => void
+  ) {
+    const user = this.socketUsers.get(socket.id);
+    if (!user || user.role !== 'god') {
+      send({ type: 'ERROR', message: '需要上帝权限' });
+      return;
+    }
+
+    const rooms = Array.from(socket.rooms);
+    const gameRoom = rooms.find(r => r !== socket.id);
+    if (!gameRoom) {
+      send({ type: 'ERROR', message: '未加入房间' });
+      return;
+    }
+
+    const game = this.gameService.getGame(gameRoom);
+    if (!game) {
+      send({ type: 'ERROR', message: '游戏不存在' });
+      return;
+    }
+
+    // 验证是否需要上帝指定
+    const needAssign = game.sheriffBadgeState === 'pending_assign' ||
+      (game.sheriffElection && game.sheriffElection.phase === 'tie');
+
+    if (!needAssign) {
+      send({ type: 'ERROR', message: '当前不需要指定警长' });
+      return;
+    }
+
+    const success = await this.gameService.godAssignSheriff(game.id, targetId);
+
+    if (success) {
+      const updatedGame = this.gameService.getGame(game.id);
+      if (updatedGame) {
+        let reason: string;
+        if (targetId === 'none') {
+          reason = '上帝选择不给警徽，警徽流失';
+        } else {
+          reason = `上帝指定${targetId}号获得警徽`;
+        }
+
+        this.io.to(game.id).emit('message', {
+          type: 'GAME_STATE_UPDATE',
+          game: updatedGame
+        } as ServerMessage);
+        this.io.to(game.id).emit('message', {
+          type: 'SHERIFF_BADGE_UPDATE',
+          sheriffId: updatedGame.sheriffId,
+          state: updatedGame.sheriffBadgeState || 'normal',
+          reason,
+        } as ServerMessage);
+        if (updatedGame.sheriffElection) {
+          this.io.to(game.id).emit('message', {
+            type: 'SHERIFF_ELECTION_UPDATE',
+            state: updatedGame.sheriffElection
+          } as ServerMessage);
+        }
+      }
+      send({ type: 'ACTION_RESULT', success: true, message: '指定成功' });
+    } else {
+      send({ type: 'ERROR', message: '指定失败' });
+    }
+  }
+
+  // ================= 上帝控制警长竞选阶段 =================
+
+  private async handleGodSheriffStartCampaign(
+    socket: Socket,
+    send: (msg: ServerMessage) => void
+  ) {
+    const user = this.socketUsers.get(socket.id);
+    if (!user || user.role !== 'god') {
+      send({ type: 'ERROR', message: '需要上帝权限' });
+      return;
+    }
+
+    const rooms = Array.from(socket.rooms);
+    const gameRoom = rooms.find(r => r !== socket.id);
+    if (!gameRoom) {
+      send({ type: 'ERROR', message: '未加入房间' });
+      return;
+    }
+
+    const game = this.gameService.getGame(gameRoom);
+    if (!game) {
+      send({ type: 'ERROR', message: '游戏不存在' });
+      return;
+    }
+
+    const success = await this.gameService.startSheriffCampaign(game.id);
+    const updatedGame = this.gameService.getGame(game.id);
+
+    if (updatedGame) {
+      this.io.to(game.id).emit('message', {
+        type: 'GAME_STATE_UPDATE',
+        game: updatedGame
+      } as ServerMessage);
+
+      if (updatedGame.sheriffElection) {
+        this.io.to(game.id).emit('message', {
+          type: 'SHERIFF_ELECTION_UPDATE',
+          state: updatedGame.sheriffElection
+        } as ServerMessage);
+      }
+    }
+
+    if (success) {
+      // 如果有机器人，执行机器人退水决策
+      if (updatedGame?.hasBot) {
+        await this.gameService.executeBotSheriffWithdraw(game.id);
+        // 重新获取更新后的游戏状态并广播
+        const gameAfterWithdraw = this.gameService.getGame(game.id);
+        if (gameAfterWithdraw) {
+          this.io.to(game.id).emit('message', {
+            type: 'GAME_STATE_UPDATE',
+            game: gameAfterWithdraw
+          } as ServerMessage);
+          if (gameAfterWithdraw.sheriffElection) {
+            this.io.to(game.id).emit('message', {
+              type: 'SHERIFF_ELECTION_UPDATE',
+              state: gameAfterWithdraw.sheriffElection
+            } as ServerMessage);
+          }
+        }
+      }
+      send({ type: 'ACTION_RESULT', success: true, message: '进入竞选发言阶段' });
+    } else {
+      // 可能是因为只有一人上警直接当选，或者没人上警
+      if (updatedGame?.sheriffElectionDone) {
+        send({ type: 'ACTION_RESULT', success: true, message: '警长竞选已完成' });
+      } else {
+        send({ type: 'ERROR', message: '进入发言阶段失败' });
+      }
+    }
+  }
+
+  private async handleGodSheriffStartVoting(
+    socket: Socket,
+    send: (msg: ServerMessage) => void
+  ) {
+    const user = this.socketUsers.get(socket.id);
+    if (!user || user.role !== 'god') {
+      send({ type: 'ERROR', message: '需要上帝权限' });
+      return;
+    }
+
+    const rooms = Array.from(socket.rooms);
+    const gameRoom = rooms.find(r => r !== socket.id);
+    if (!gameRoom) {
+      send({ type: 'ERROR', message: '未加入房间' });
+      return;
+    }
+
+    const game = this.gameService.getGame(gameRoom);
+    if (!game) {
+      send({ type: 'ERROR', message: '游戏不存在' });
+      return;
+    }
+
+    const success = await this.gameService.startSheriffVoting(game.id);
+    if (success) {
+      // 如果有机器人，执行机器人警长投票
+      if (game.hasBot) {
+        await this.gameService.executeBotSheriffVote(game.id);
+      }
+
+      const updatedGame = this.gameService.getGame(game.id);
+      if (updatedGame) {
+        this.io.to(game.id).emit('message', {
+          type: 'GAME_STATE_UPDATE',
+          game: updatedGame
+        } as ServerMessage);
+
+        if (updatedGame.sheriffElection) {
+          this.io.to(game.id).emit('message', {
+            type: 'SHERIFF_ELECTION_UPDATE',
+            state: updatedGame.sheriffElection
+          } as ServerMessage);
+        }
+      }
+      send({ type: 'ACTION_RESULT', success: true, message: '进入投票阶段' });
+    } else {
+      send({ type: 'ERROR', message: '进入投票阶段失败' });
+    }
+  }
+
+  private async handleGodSheriffTallyVotes(
+    socket: Socket,
+    send: (msg: ServerMessage) => void
+  ) {
+    const user = this.socketUsers.get(socket.id);
+    if (!user || user.role !== 'god') {
+      send({ type: 'ERROR', message: '需要上帝权限' });
+      return;
+    }
+
+    const rooms = Array.from(socket.rooms);
+    const gameRoom = rooms.find(r => r !== socket.id);
+    if (!gameRoom) {
+      send({ type: 'ERROR', message: '未加入房间' });
+      return;
+    }
+
+    const game = this.gameService.getGame(gameRoom);
+    if (!game) {
+      send({ type: 'ERROR', message: '游戏不存在' });
+      return;
+    }
+
+    const result = await this.gameService.tallySheriffVotes(game.id);
+    const updatedGame = this.gameService.getGame(game.id);
+
+    if (updatedGame) {
+      this.io.to(game.id).emit('message', {
+        type: 'GAME_STATE_UPDATE',
+        game: updatedGame
+      } as ServerMessage);
+
+      if (updatedGame.sheriffElection) {
+        this.io.to(game.id).emit('message', {
+          type: 'SHERIFF_ELECTION_UPDATE',
+          state: updatedGame.sheriffElection
+        } as ServerMessage);
+      }
+
+      // 如果有人当选，广播警徽更新
+      if (result.winner) {
+        this.io.to(game.id).emit('message', {
+          type: 'SHERIFF_BADGE_UPDATE',
+          sheriffId: result.winner,
+          state: 'normal',
+          reason: `${result.winner}号当选警长`,
+        } as ServerMessage);
+      }
+    }
+
+    if (result.isTie) {
+      send({ type: 'ACTION_RESULT', success: true, message: `平票！请指定警长：${result.tiedPlayers?.join('号、')}号` });
+    } else if (result.winner) {
+      send({ type: 'ACTION_RESULT', success: true, message: `${result.winner}号当选警长` });
+    } else {
+      send({ type: 'ACTION_RESULT', success: true, message: '无人当选警长' });
     }
   }
 }

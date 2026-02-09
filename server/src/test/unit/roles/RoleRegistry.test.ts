@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { RoleRegistry } from './RoleRegistry.js';
+import { RoleRegistry } from '../../../game/roles/RoleRegistry.js';
 
 describe('RoleRegistry', () => {
   it('应该能通过roleId获取handler', () => {

@@ -1,4 +1,5 @@
-import { Game, SheriffElectionState, ExileVoteState } from '../../../shared/src/types.js';
+import { Game, SheriffElectionState, ExileVoteState, SheriffBadgeState } from '../../../shared/src/types.js';
+import { DeathReason } from '../game/skill/SkillTypes.js';
 
 export class VotingSystem {
   // ================= 警长竞选系统 =================
@@ -153,9 +154,10 @@ export class VotingSystem {
 
   /**
    * 统计警长选举结果
+   * 返回值：{ winner: 当选者 | null, isTie: 是否平票, tiedPlayers?: 平票玩家列表 }
    */
-  tallySheriffVotes(game: Game): number | null {
-    if (!game.sheriffElection) return null;
+  tallySheriffVotes(game: Game): { winner: number | null; isTie: boolean; tiedPlayers?: number[] } {
+    if (!game.sheriffElection) return { winner: null, isTie: false };
 
     const voteCounts = new Map<number, number>();
 
@@ -171,34 +173,51 @@ export class VotingSystem {
       voteCounts.set(candidateId, (voteCounts.get(candidateId) || 0) + voteWeight);
     });
 
-    // 找出得票最高者
-    let maxVotes = 0;
-    let winner: number | null = null;
+    // 如果没有人投票，无警长
+    if (voteCounts.size === 0) {
+      game.sheriffElectionDone = true;
+      if (game.sheriffElection) {
+        game.sheriffElection.phase = 'done';
+      }
+      return { winner: null, isTie: false };
+    }
 
+    // 找出最高票数
+    const maxVotes = Math.max(...voteCounts.values());
+
+    // 找出所有得票最高的玩家
+    const topPlayers: number[] = [];
     voteCounts.forEach((votes, candidateId) => {
-      if (votes > maxVotes) {
-        maxVotes = votes;
-        winner = candidateId;
+      if (votes === maxVotes) {
+        topPlayers.push(candidateId);
       }
     });
 
-    if (winner) {
-      this.electSheriff(game, winner);
+    // 检查平票情况
+    if (topPlayers.length > 1) {
+      // 平票：进入 'tie' 阶段，由上帝指定
+      game.sheriffElection.phase = 'tie';
+      game.sheriffElection.tiedPlayers = topPlayers;
+      return { winner: null, isTie: true, tiedPlayers: topPlayers };
     }
 
-    return winner;
+    // 单一获胜者
+    const winner = topPlayers[0];
+    this.electSheriff(game, winner);
+    return { winner, isTie: false };
   }
 
   /**
    * 选举警长
    */
-  private electSheriff(game: Game, sheriffId: number): void {
+  electSheriff(game: Game, sheriffId: number): void {
     game.players.forEach(p => (p.isSheriff = false));
 
     const sheriff = game.players.find(p => p.playerId === sheriffId);
     if (sheriff) {
       sheriff.isSheriff = true;
       game.sheriffId = sheriffId;
+      game.sheriffBadgeState = 'normal';
     }
 
     game.sheriffElectionDone = true;
@@ -207,6 +226,121 @@ export class VotingSystem {
       game.sheriffElection.phase = 'done';
       game.sheriffElection.result = sheriffId;
     }
+
+    // 清理待处理的传递状态
+    game.pendingSheriffTransfer = undefined;
+  }
+
+  // ================= 警徽管理系统 =================
+
+  /**
+   * 处理警长死亡 - 设置待传递状态
+   */
+  handleSheriffDeath(game: Game, sheriffId: number, deathReason: string): void {
+    if (!game.sheriffId || game.sheriffId !== sheriffId) return;
+
+    // 获取可传递目标（活着的玩家，排除自己）
+    const validTargets = game.players
+      .filter(p => p.alive && p.playerId !== sheriffId)
+      .map(p => p.playerId);
+
+    // 设置待传递状态
+    game.sheriffBadgeState = 'pending_transfer';
+    game.pendingSheriffTransfer = {
+      fromPlayerId: sheriffId,
+      options: validTargets,
+      reason: deathReason === 'self_destruct' ? 'wolf_explosion' : 'death',
+    };
+  }
+
+  /**
+   * 传递警徽给另一个玩家
+   */
+  transferSheriffBadge(game: Game, targetId: number): boolean {
+    if (!game.pendingSheriffTransfer) return false;
+
+    // 验证目标在可选范围内
+    if (!game.pendingSheriffTransfer.options.includes(targetId)) {
+      return false;
+    }
+
+    // 传递警徽
+    game.players.forEach(p => (p.isSheriff = false));
+    const newSheriff = game.players.find(p => p.playerId === targetId);
+    if (newSheriff && newSheriff.alive) {
+      newSheriff.isSheriff = true;
+      game.sheriffId = targetId;
+      game.sheriffBadgeState = 'normal';
+      game.pendingSheriffTransfer = undefined;
+      return true;
+    }
+
+    return false;
+  }
+
+  /**
+   * 撕毁警徽
+   */
+  destroySheriffBadge(game: Game): boolean {
+    if (!game.pendingSheriffTransfer && game.sheriffBadgeState !== 'pending_assign') {
+      return false;
+    }
+
+    game.players.forEach(p => (p.isSheriff = false));
+    game.sheriffId = 0;
+    game.sheriffBadgeState = 'destroyed';
+    game.pendingSheriffTransfer = undefined;
+
+    // 如果是警长竞选平票导致的，也需要完成竞选
+    if (game.sheriffElection && game.sheriffElection.phase === 'tie') {
+      game.sheriffElection.phase = 'done';
+      game.sheriffElectionDone = true;
+    }
+
+    return true;
+  }
+
+  /**
+   * 上帝指定警长（适用于狼人自爆和平票场景）
+   */
+  godAssignSheriff(game: Game, targetId: number | 'none'): boolean {
+    // 验证状态
+    const isValidState = game.sheriffBadgeState === 'pending_assign' ||
+      (game.sheriffElection && game.sheriffElection.phase === 'tie');
+
+    if (!isValidState) return false;
+
+    if (targetId === 'none') {
+      // 上帝选择不给警徽
+      return this.destroySheriffBadge(game);
+    }
+
+    // 验证目标是否有效
+    const target = game.players.find(p => p.playerId === targetId);
+    if (!target || !target.alive) return false;
+
+    // 如果是平票场景，验证目标是否在平票玩家中
+    if (game.sheriffElection?.phase === 'tie' && game.sheriffElection.tiedPlayers) {
+      if (!game.sheriffElection.tiedPlayers.includes(targetId)) {
+        return false;
+      }
+    }
+
+    // 指定警长
+    game.players.forEach(p => (p.isSheriff = false));
+    target.isSheriff = true;
+    game.sheriffId = targetId;
+    game.sheriffBadgeState = 'normal';
+    game.pendingSheriffTransfer = undefined;
+
+    // 完成警长竞选
+    if (game.sheriffElection) {
+      game.sheriffElection.phase = 'done';
+      game.sheriffElection.result = targetId;
+    }
+    game.sheriffElectionDone = true;
+
+    return true;
   }
 
   // ================= 放逐投票系统 =================
@@ -394,7 +528,7 @@ export class VotingSystem {
     const player = game.players.find(p => p.playerId === playerId);
     if (player && player.alive) {
       player.alive = false;
-      player.outReason = 'exile';
+      player.outReason = DeathReason.EXILE;
     }
   }
 }

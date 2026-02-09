@@ -1,17 +1,17 @@
 import { describe, it, expect } from 'vitest';
-import { ScriptPresets } from './ScriptPresets.js';
-import { ScriptValidator } from './ScriptValidator.js';
-import { ScriptPhaseGenerator } from './ScriptPhaseGenerator.js';
-import { RoleRegistry } from '../roles/RoleRegistry.js';
+import { ScriptPresets } from '../../game/script/ScriptPresets.js';
+import { ScriptValidator } from '../../game/script/ScriptValidator.js';
+import { ScriptPhaseGenerator } from '../../game/script/ScriptPhaseGenerator.js';
+import { RoleRegistry } from '../../game/roles/RoleRegistry.js';
 
 describe('ScriptPresets', () => {
   const validator = new ScriptValidator();
   const phaseGenerator = new ScriptPhaseGenerator();
 
   describe('getAllPresets', () => {
-    it('应该返回3个预设剧本', () => {
+    it('应该返回7个预设剧本', () => {
       const presets = ScriptPresets.getAllPresets();
-      expect(presets).toHaveLength(3);
+      expect(presets).toHaveLength(7);
     });
 
     it('所有预设剧本都应该有唯一ID', () => {
@@ -261,17 +261,15 @@ describe('ScriptPresets', () => {
       });
     });
 
-    it('所有剧本都应该是12人', () => {
+    it('所有剧本的playerCount应该与角色总数一致', () => {
       allPresets.forEach(script => {
-        expect(script.playerCount).toBe(12);
         const totalPlayers = Object.values(script.roleComposition).reduce((sum, count) => sum + count, 0);
-        expect(totalPlayers).toBe(12);
+        expect(totalPlayers).toBe(script.playerCount);
       });
     });
 
-    it('所有剧本都应该有4狼8好', () => {
+    it('所有剧本的狼人数量应该在合理范围内', () => {
       allPresets.forEach(script => {
-        // 统计狼人和好人数量
         const wolfCount = Object.entries(script.roleComposition).reduce((sum, [roleId, count]) => {
           const handler = RoleRegistry.getHandler(roleId);
           return sum + (handler?.camp === 'wolf' ? count : 0);
@@ -280,8 +278,9 @@ describe('ScriptPresets', () => {
         const totalPlayers = Object.values(script.roleComposition).reduce((sum, count) => sum + count, 0);
         const goodCount = totalPlayers - wolfCount;
 
-        expect(wolfCount).toBe(4);
-        expect(goodCount).toBe(8);
+        // 狼人数量应大于0且小于好人数量
+        expect(wolfCount).toBeGreaterThan(0);
+        expect(goodCount).toBeGreaterThan(wolfCount);
       });
     });
   });

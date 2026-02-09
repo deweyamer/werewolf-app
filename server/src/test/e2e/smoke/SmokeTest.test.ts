@@ -8,7 +8,7 @@
  */
 
 import { describe, it, expect, beforeEach } from 'vitest';
-import { E2ETestExecutor, TestScenarios } from './E2ETestFramework.js';
+import { E2ETestExecutor, TestScenarios } from '../../helpers/E2ETestFramework.js';
 
 describe('E2E 冒烟测试 - 关键路径验证', () => {
   let executor: E2ETestExecutor;

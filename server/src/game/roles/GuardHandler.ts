@@ -57,6 +57,10 @@ export class GuardHandler extends BaseRoleHandler {
     // 更新上次守护目标
     guard.abilities.lastGuardTarget = target;
 
+    // 更新nightActions，让上帝可以看到守卫的行动
+    game.nightActions.guardTarget = target;
+    game.nightActions.guardSubmitted = true;
+
     return {
       success: true,
       message: `守护${target}号`,

@@ -1,0 +1,281 @@
+import { describe, it, expect, beforeEach } from 'vitest';
+import { GameFlowEngine } from '../../../game/flow/GameFlowEngine.js';
+import { VotingSystem } from '../../../game/VotingSystem.js';
+import { createMockGame, createMockPlayer } from '../../helpers/GameTestHelper.js';
+import { Game } from '../../../../../shared/src/types.js';
+
+/**
+ * GameFlowEngine 单元测试
+ *
+ * 测试策略：
+ * - 构造 mock Game + scriptPhases，注入真实 VotingSystem
+ * - SkillResolver 由 GameFlowEngine 内部创建（无需 mock）
+ * - 测试阶段推进、夜间/白天结算、胜利判定
+ */
+describe('GameFlowEngine', () => {
+  let engine: GameFlowEngine;
+  let votingSystem: VotingSystem;
+  let game: Game;
+
+  // Minimal script phases for testing
+  const scriptPhases = [
+    { id: 'lobby', order: 0, isNightPhase: false, description: '等待开始' },
+    { id: 'fear', order: 1, isNightPhase: true, description: '噩梦之影恐惧' },
+    { id: 'wolf', order: 2, isNightPhase: true, description: '狼人行动' },
+    { id: 'witch', order: 3, isNightPhase: true, description: '女巫行动' },
+    { id: 'seer', order: 4, isNightPhase: true, description: '预言家查验' },
+    { id: 'settle', order: 5, isNightPhase: false, description: '夜间结算' },
+    { id: 'sheriffElection', order: 6, isNightPhase: false, description: '警长竞选' },
+    { id: 'discussion', order: 7, isNightPhase: false, description: '讨论发言' },
+    { id: 'vote', order: 8, isNightPhase: false, description: '投票阶段' },
+    { id: 'daySettle', order: 9, isNightPhase: false, description: '白天结算' },
+    { id: 'finished', order: 10, isNightPhase: false, description: '游戏结束' },
+  ];
+
+  function createStandardGame(): Game {
+    const players = [
+      createMockPlayer(1, 'wolf', 'wolf'),
+      createMockPlayer(2, 'wolf', 'wolf'),
+      createMockPlayer(3, 'wolf', 'wolf'),
+      createMockPlayer(4, 'wolf', 'wolf'),
+      createMockPlayer(5, 'seer', 'good'),
+      createMockPlayer(6, 'witch', 'good'),
+      createMockPlayer(7, 'hunter', 'good'),
+      createMockPlayer(8, 'guard', 'good'),
+      createMockPlayer(9, 'villager', 'good'),
+      createMockPlayer(10, 'villager', 'good'),
+      createMockPlayer(11, 'villager', 'good'),
+      createMockPlayer(12, 'villager', 'good'),
+    ];
+    return createMockGame({
+      players,
+      nightActions: {} as any,
+      currentRound: 1,
+    });
+  }
+
+  beforeEach(() => {
+    votingSystem = new VotingSystem();
+    engine = new GameFlowEngine(votingSystem);
+    game = createStandardGame();
+  });
+
+  // ─────────────────────────────────────────────
+  // advancePhase
+  // ─────────────────────────────────────────────
+  describe('advancePhase', () => {
+    it('应该推进到下一阶段', async () => {
+      game.currentPhase = 'wolf';
+      const result = await engine.advancePhase(game, scriptPhases);
+
+      expect(result.finished).toBe(false);
+      expect(result.phase).toBe('witch');
+      expect(game.currentPhase).toBe('witch');
+    });
+
+    it('settle 阶段应该结算夜间效果并清空 nightActions', async () => {
+      game.currentPhase = 'seer';
+      game.nightActions = { wolfKill: 10 } as any;
+
+      const result = await engine.advancePhase(game, scriptPhases);
+
+      // Should advance to settle and process night settlement
+      expect(game.nightActions).toEqual({});
+      // Player 10 should be dead (wolf kill with no protection)
+      const player10 = game.players.find(p => p.playerId === 10);
+      expect(player10?.alive).toBe(false);
+    });
+
+    it('settle 阶段无狼刀时应该平安夜', async () => {
+      game.currentPhase = 'seer';
+      game.nightActions = {} as any;
+
+      await engine.advancePhase(game, scriptPhases);
+
+      // All players should still be alive
+      expect(game.players.every(p => p.alive)).toBe(true);
+    });
+
+    it('第1回合 settle 后应该自动进入警长竞选', async () => {
+      game.currentPhase = 'seer';
+      game.currentRound = 1;
+      game.sheriffElectionDone = false;
+      game.nightActions = {} as any;
+
+      const result = await engine.advancePhase(game, scriptPhases);
+
+      expect(result.phase).toBe('sheriffElection');
+      expect(game.currentPhase).toBe('sheriffElection');
+      expect(game.currentPhaseType).toBe('day');
+    });
+
+    it('第1回合 settle 后如果竞选已完成应该跳过警长竞选', async () => {
+      game.currentPhase = 'settle';
+      game.currentRound = 1;
+      game.sheriffElectionDone = true;
+
+      const result = await engine.advancePhase(game, scriptPhases);
+
+      expect(result.phase).toBe('discussion');
+      expect(game.currentPhase).toBe('discussion');
+    });
+
+    it('到达 finished 阶段时应该进入下一回合', async () => {
+      game.currentPhase = 'daySettle';
+      game.currentRound = 1;
+
+      const result = await engine.advancePhase(game, scriptPhases);
+
+      // Should wrap to first night phase, incrementing round
+      expect(game.currentRound).toBe(2);
+      expect(game.currentPhase).toBe('fear');
+      expect(game.currentPhaseType).toBe('night');
+    });
+
+    it('无效阶段应该返回错误信息', async () => {
+      game.currentPhase = 'nonexistent' as any;
+      const result = await engine.advancePhase(game, scriptPhases);
+
+      expect(result.finished).toBe(false);
+      expect(result.message).toContain('配置错误');
+    });
+  });
+
+  // ─────────────────────────────────────────────
+  // checkWinner (tested via advancePhase settle)
+  // ─────────────────────────────────────────────
+  describe('checkWinner (via settle)', () => {
+    it('所有狼人死亡 → 好人获胜', async () => {
+      game.currentPhase = 'seer';
+      game.nightActions = {} as any;
+
+      // Kill all wolves manually
+      game.players.forEach(p => {
+        if (p.camp === 'wolf') {
+          p.alive = false;
+          p.outReason = 'wolf_kill';
+        }
+      });
+
+      const result = await engine.advancePhase(game, scriptPhases);
+
+      expect(result.finished).toBe(true);
+      expect(result.winner).toBe('good');
+      expect(game.status).toBe('finished');
+    });
+
+    it('狼人数量>=好人数量 → 狼人获胜', async () => {
+      game.currentPhase = 'seer';
+      game.nightActions = {} as any;
+
+      // Kill good players until wolves >= goods
+      // 4 wolves, need goods <= 4, so kill 4 of the 8 good players
+      let killCount = 0;
+      game.players.forEach(p => {
+        if (p.camp === 'good' && killCount < 4) {
+          p.alive = false;
+          p.outReason = 'wolf_kill';
+          killCount++;
+        }
+      });
+
+      const result = await engine.advancePhase(game, scriptPhases);
+
+      expect(result.finished).toBe(true);
+      expect(result.winner).toBe('wolf');
+    });
+
+    it('双方都有存活玩家 → 游戏继续', async () => {
+      game.currentPhase = 'seer';
+      game.nightActions = {} as any;
+      game.sheriffElectionDone = true; // Skip election
+
+      // Kill 1 good player (wolves=4, goods=7 → game continues)
+      const villager = game.players.find(p => p.playerId === 9);
+      if (villager) {
+        villager.alive = false;
+        villager.outReason = 'wolf_kill';
+      }
+
+      const result = await engine.advancePhase(game, scriptPhases);
+
+      expect(result.finished).toBe(false);
+    });
+  });
+
+  // ─────────────────────────────────────────────
+  // submitAction
+  // ─────────────────────────────────────────────
+  describe('submitAction', () => {
+    it('死亡玩家不能提交行动', async () => {
+      game.players[0].alive = false;
+
+      const result = await engine.submitAction(game, {
+        phase: 'wolf',
+        playerId: 1,
+        actionType: 'action',
+        target: 10,
+      });
+
+      expect(result.success).toBe(false);
+      expect(result.message).toContain('不存在或已死亡');
+    });
+
+    it('被恐惧的玩家不能使用技能', async () => {
+      game.players[4].feared = true; // seer (player 5) is feared
+      game.currentPhaseType = 'night';
+
+      const result = await engine.submitAction(game, {
+        phase: 'seer',
+        playerId: 5,
+        actionType: 'action',
+        target: 1,
+      });
+
+      expect(result.success).toBe(false);
+      expect(result.message).toContain('恐惧');
+    });
+
+    it('投票阶段应该走投票系统', async () => {
+      game.currentPhase = 'vote';
+      game.currentPhaseType = 'day';
+
+      const result = await engine.submitAction(game, {
+        phase: 'vote',
+        playerId: 5,
+        actionType: 'vote',
+        target: 1,
+      });
+
+      expect(result.success).toBe(true);
+      expect(game.exileVote).toBeDefined();
+    });
+  });
+
+  // ─────────────────────────────────────────────
+  // 投票 → daySettle 流程
+  // ─────────────────────────────────────────────
+  describe('vote → daySettle', () => {
+    it('投票放逐应该在白天结算中处理', async () => {
+      game.currentPhase = 'vote';
+      game.currentPhaseType = 'day';
+      game.sheriffElectionDone = true;
+
+      // Set up exile vote
+      votingSystem.startExileVote(game);
+      // Multiple players vote for player 1 (wolf)
+      votingSystem.voteForExile(game, 5, 1);
+      votingSystem.voteForExile(game, 6, 1);
+      votingSystem.voteForExile(game, 7, 1);
+      votingSystem.voteForExile(game, 8, 1);
+      votingSystem.voteForExile(game, 9, 1);
+
+      // Advance from vote → daySettle
+      const result = await engine.advancePhase(game, scriptPhases);
+
+      // Player 1 should be exiled
+      const player1 = game.players.find(p => p.playerId === 1);
+      expect(player1?.alive).toBe(false);
+    });
+  });
+});

@@ -12,7 +12,7 @@ import {
   E2ETestConfig,
   TestRound,
   ScenarioBuilder,
-} from './E2ETestFramework.js';
+} from './helpers/E2ETestFramework.js';
 
 // ==================== 摄梦人剧本测试套件 ====================
 

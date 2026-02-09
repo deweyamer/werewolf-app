@@ -10,7 +10,11 @@
       "Bash(netstat:*)",
       "Bash(findstr:*)",
       "Bash(taskkill:*)",
-      "Bash(npm test:*)"
+      "Bash(npm test:*)",
+      "Bash(npx vitest:*)",
+      "Bash(npx tsc:*)",
+      "Bash(ls \"c:\\\\Users\\\\Dewey.Du\\\\VscodePythonProjects\\\\werewolf-app\\\\client\\\\src\\\\hooks\"\" 2>nul || echo \"Directory does not exist \")",
+      "Bash(wc:*)"
     ]
   }
 }

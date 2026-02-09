@@ -1,7 +1,7 @@
 import { v4 as uuidv4 } from 'uuid';
-import { Game, GamePhase, PlayerAction, ActionLog } from '../../../../shared/src/types.js';
+import { Game, GamePhase, GamePlayer, PlayerAction, ActionLog } from '../../../../shared/src/types.js';
 import { SkillResolver } from '../skill/SkillResolver.js';
-import { PhaseResult, ActionResult, SkillEffectType, SkillPriority, SkillTiming, DeathReason } from '../skill/SkillTypes.js';
+import { PhaseResult, ActionResult, SettleResult, SkillEffect, SkillEffectType, SkillPriority, SkillTiming, DeathReason } from '../skill/SkillTypes.js';
 import { RoleRegistry } from '../roles/RoleRegistry.js';
 import { VotingSystem } from '../VotingSystem.js';
 
@@ -13,9 +13,9 @@ export class GameFlowEngine {
   private skillResolver: SkillResolver;
   private votingSystem: VotingSystem;
 
-  constructor() {
+  constructor(votingSystem: VotingSystem) {
     this.skillResolver = new SkillResolver();
-    this.votingSystem = new VotingSystem();
+    this.votingSystem = votingSystem;
   }
 
   /**
@@ -36,6 +36,8 @@ export class GameFlowEngine {
         return { finished: false, message: '无法找到下一阶段' };
       }
       game.currentRound++;
+      // 清空上一轮的投票状态，为新回合准备
+      game.exileVote = undefined;
       game.currentPhase = firstNightPhase.id;
       game.currentPhaseType = 'night';
       return { finished: false, phase: firstNightPhase.id, prompt: firstNightPhase.description };
@@ -45,14 +47,11 @@ export class GameFlowEngine {
     if (currentPhaseConfig.id === 'vote' && nextPhaseConfig.id === 'daySettle') {
       // 如果有投票数据，处理放逐
       if (game.exileVote && Object.keys(game.exileVote.votes || {}).length > 0) {
-        console.log('[DEBUG] Processing votes:', game.exileVote.votes);
         const tallyResult = this.votingSystem.tallyExileVotes(game);
-        console.log('[DEBUG] Tally result:', tallyResult);
 
         // 如果有玩家被投票出局
         if (typeof tallyResult.result === 'number') {
           const exiledPlayerId = tallyResult.result;
-          console.log('[DEBUG] Creating exile effect for player:', exiledPlayerId);
 
           // 创建放逐技能效果
           const exileEffect = {
@@ -68,22 +67,53 @@ export class GameFlowEngine {
 
           // 添加到技能结算器
           this.skillResolver.addEffect(exileEffect);
-          console.log('[DEBUG] Exile effect added to skill resolver');
         }
-      } else {
-        console.log('[DEBUG] No exile votes found');
       }
     }
-    console.log('[DEBUG] After vote processing, effects in queue:', this.skillResolver['effectQueue']?.length || 0);
 
     // 特殊处理：夜间结算
     if (nextPhaseConfig.id === 'settle') {
+      // 根据狼人共识目标创建单一狼刀效果
+      if (game.nightActions.wolfKill) {
+        const wolfKillEffect: SkillEffect = {
+          id: uuidv4(),
+          type: SkillEffectType.KILL,
+          priority: SkillPriority.WOLF_KILL,
+          timing: SkillTiming.NIGHT_ACTION,
+          actorId: 0, // 系统（狼人集体行动）
+          targetId: game.nightActions.wolfKill,
+          executed: false,
+          blocked: false,
+          data: {
+            message: `狼人决定刀${game.nightActions.wolfKill}号`,
+          },
+        };
+        this.skillResolver.addEffect(wolfKillEffect);
+      }
+
       const settleResult = await this.skillResolver.resolve(game, 'night');
 
       // 记录结算日志
       this.recordSettleLog(game, settleResult.messages, settleResult.deaths);
 
-      // 清空夜间操作
+      // 处理死亡触发技能和警长死亡
+      for (const deadPlayerId of settleResult.deaths) {
+        const deadPlayer = game.players.find(p => p.playerId === deadPlayerId);
+        if (!deadPlayer) continue;
+
+        // 处理警长死亡
+        if (deadPlayer.isSheriff) {
+          this.votingSystem.handleSheriffDeath(game, deadPlayerId, 'night_death');
+        }
+
+        // 处理死亡触发技能（如猎人开枪、黑狼王爆炸）
+        await this.processDeathTrigger(game, deadPlayer, settleResult);
+      }
+
+      // 保存本回合夜间操作到历史记录
+      this.saveRoundHistory(game, settleResult.deaths, settleResult.messages.join('\n'));
+
+      // 清空夜间操作（为下一回合准备）
       game.nightActions = {};
 
       // 清空技能结算器
@@ -98,17 +128,36 @@ export class GameFlowEngine {
         game.finishedAt = new Date().toISOString();
         return { finished: true, winner, message: `游戏结束，${winner === 'wolf' ? '狼人' : '好人'}获胜` };
       }
+
+      // 第1回合夜间结算后，自动启动警长竞选
+      if (game.currentRound === 1 && !game.sheriffElectionDone) {
+        this.votingSystem.startSheriffElection(game);
+        game.currentPhase = 'sheriffElection';
+        game.currentPhaseType = 'day';
+        return { finished: false, phase: 'sheriffElection', prompt: '警长竞选开始，请选择是否上警' };
+      }
     }
 
     // 特殊处理：白天结算
     if (nextPhaseConfig.id === 'daySettle') {
-      console.log('[DEBUG] About to run day settlement, queue length:', this.skillResolver['effectQueue']?.length || 0);
-      console.log('[DEBUG] Running day settlement');
       const settleResult = await this.skillResolver.resolve(game, 'day');
-      console.log('[DEBUG] Day settlement result:', settleResult);
 
       // 记录结算日志
       this.recordSettleLog(game, settleResult.messages, settleResult.deaths);
+
+      // 处理死亡触发技能和警长死亡
+      for (const deadPlayerId of settleResult.deaths) {
+        const deadPlayer = game.players.find(p => p.playerId === deadPlayerId);
+        if (!deadPlayer) continue;
+
+        // 处理警长死亡
+        if (deadPlayer.isSheriff) {
+          this.votingSystem.handleSheriffDeath(game, deadPlayerId, 'day_death');
+        }
+
+        // 处理死亡触发技能（如猎人开枪、黑狼王爆炸）
+        await this.processDeathTrigger(game, deadPlayer, settleResult);
+      }
 
       // 清除恐惧状态（恐惧持续完整一个白天+夜晚回合，在白天结算后清除）
       game.players.forEach(p => {
@@ -116,6 +165,9 @@ export class GameFlowEngine {
           p.feared = false;
         }
       });
+
+      // 更新本回合历史记录的放逐投票信息
+      this.updateRoundHistoryWithExileVote(game, settleResult.deaths);
 
       // 清空技能结算器
       this.skillResolver.clear();
@@ -133,12 +185,26 @@ export class GameFlowEngine {
 
     // 特殊处理：警长竞选（仅第一轮）
     if (nextPhaseConfig.id === 'sheriffElection' && game.sheriffElectionDone) {
-      // 跳过警长竞选，直接进入下一阶段
-      const votePhase = scriptPhases.find(p => p.id === 'vote');
-      if (votePhase) {
-        game.currentPhase = 'vote';
+      // 跳过警长竞选，直接进入讨论阶段
+      const discussionPhase = scriptPhases.find(p => p.id === 'discussion');
+      if (discussionPhase) {
+        game.currentPhase = 'discussion';
         game.currentPhaseType = 'day';
-        return { finished: false, phase: 'vote', prompt: '进入投票放逐阶段' };
+        return { finished: false, phase: 'discussion', prompt: '进入讨论发言阶段' };
+      }
+    }
+
+    // 特殊处理：不应该进入'finished'阶段（游戏结束应该通过胜利判定触发）
+    if (nextPhaseConfig.id === 'finished') {
+      // 游戏未结束，进入下一回合的夜晚
+      const firstNightPhase = scriptPhases.find(p => p.isNightPhase && p.order > 0);
+      if (firstNightPhase) {
+        game.currentRound++;
+        // 清空上一轮的投票状态，为新回合准备
+        game.exileVote = undefined;
+        game.currentPhase = firstNightPhase.id;
+        game.currentPhaseType = 'night';
+        return { finished: false, phase: firstNightPhase.id, prompt: `第${game.currentRound}回合夜晚开始` };
       }
     }
 
@@ -162,20 +228,15 @@ export class GameFlowEngine {
       return { success: false, message: '玩家不存在或已死亡' };
     }
 
-    console.log(`[DEBUG] submitAction: phase=${game.currentPhase}, playerId=${action.playerId}, target=${action.target}`);
-
     // 特殊处理：投票阶段
     if (game.currentPhase === 'vote' && action.target !== undefined) {
-      console.log(`[DEBUG] Vote action received: player ${action.playerId} -> ${action.target}`);
       // 初始化投票系统
       if (!game.exileVote) {
-        console.log('[DEBUG] Initializing exile vote');
         this.votingSystem.startExileVote(game);
       }
 
       // 提交投票
       const voteResult = this.votingSystem.voteForExile(game, action.playerId, action.target);
-      console.log(`[DEBUG] Vote result: ${voteResult}, current votes:`, game.exileVote?.votes);
       if (!voteResult) {
         return { success: false, message: '投票失败' };
       }
@@ -299,9 +360,85 @@ export class GameFlowEngine {
   }
 
   /**
+   * 处理死亡触发技能（如猎人开枪、黑狼王爆炸）
+   */
+  private async processDeathTrigger(game: Game, deadPlayer: GamePlayer, settleResult: SettleResult): Promise<void> {
+    const handler = RoleRegistry.getHandler(deadPlayer.role);
+    if (!handler || !handler.hasDeathTrigger) return;
+
+    const deathReason = deadPlayer.outReason || 'unknown';
+    const pendingEffect = await handler.onDeath(game, deadPlayer, deathReason);
+
+    if (pendingEffect) {
+      settleResult.pendingEffects.push(pendingEffect);
+    }
+  }
+
+  /**
    * 获取技能结算器（供测试使用）
    */
   getSkillResolver(): SkillResolver {
     return this.skillResolver;
+  }
+
+  /**
+   * 保存回合历史记录（夜间结算时调用）
+   */
+  private saveRoundHistory(game: Game, deaths: number[], settlementMessage: string): void {
+    if (!game.roundHistory) {
+      game.roundHistory = [];
+    }
+
+    // 深拷贝夜间操作
+    const nightActionsCopy = JSON.parse(JSON.stringify(game.nightActions));
+
+    const entry = {
+      round: game.currentRound,
+      nightActions: nightActionsCopy,
+      deaths: deaths,
+      settlementMessage: settlementMessage,
+    };
+
+    // 查找是否已有该回合的记录
+    const existingIndex = game.roundHistory.findIndex(h => h.round === game.currentRound);
+    if (existingIndex >= 0) {
+      // 更新现有记录
+      game.roundHistory[existingIndex] = { ...game.roundHistory[existingIndex], ...entry };
+    } else {
+      // 新增记录
+      game.roundHistory.push(entry);
+    }
+  }
+
+  /**
+   * 更新回合历史记录的放逐投票信息（白天结算时调用）
+   */
+  private updateRoundHistoryWithExileVote(game: Game, dayDeaths: number[]): void {
+    if (!game.roundHistory) {
+      game.roundHistory = [];
+    }
+
+    // 查找当前回合的记录
+    const existingIndex = game.roundHistory.findIndex(h => h.round === game.currentRound);
+
+    if (existingIndex >= 0) {
+      // 更新现有记录，添加放逐投票信息
+      if (game.exileVote) {
+        game.roundHistory[existingIndex].exileVote = JSON.parse(JSON.stringify(game.exileVote));
+      }
+      // 合并白天死亡的玩家
+      game.roundHistory[existingIndex].deaths = [
+        ...game.roundHistory[existingIndex].deaths,
+        ...dayDeaths,
+      ];
+    } else {
+      // 如果不存在（不应该发生），创建新记录
+      game.roundHistory.push({
+        round: game.currentRound,
+        nightActions: {},
+        exileVote: game.exileVote ? JSON.parse(JSON.stringify(game.exileVote)) : undefined,
+        deaths: dayDeaths,
+      });
+    }
   }
 }

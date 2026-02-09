@@ -68,6 +68,23 @@ export class WhiteWolfHandler extends BaseRoleHandler {
     // 标记自爆已使用
     whiteWolf.abilities.whiteWolfBoomUsed = true;
 
+    // 处理警徽：如果白狼王是警长，需要上帝指定警徽归属
+    const wasSheriff = whiteWolf.isSheriff;
+    if (wasSheriff) {
+      const validTargets = game.players
+        .filter(p => p.alive && p.playerId !== action.playerId)
+        .map(p => p.playerId);
+
+      game.sheriffBadgeState = 'pending_assign';
+      game.pendingSheriffTransfer = {
+        fromPlayerId: action.playerId,
+        options: validTargets,
+        reason: 'wolf_explosion',
+      };
+      whiteWolf.isSheriff = false;
+      game.sheriffId = 0;
+    }
+
     // 白狼王自爆后立即死亡
     whiteWolf.alive = false;
     whiteWolf.outReason = 'self_destruct';
@@ -78,6 +95,7 @@ export class WhiteWolfHandler extends BaseRoleHandler {
       effect,
       data: {
         skipToNight: true,
+        sheriffPendingAssign: wasSheriff,
       },
     };
   }

@@ -1,9 +1,9 @@
 import { describe, it, expect, beforeEach } from 'vitest';
-import { ScriptPresets } from './ScriptPresets.js';
+import { ScriptPresets } from '../../game/script/ScriptPresets.js';
 import { ScriptService } from '../../services/ScriptService.js';
 import { GameService } from '../../services/GameService.js';
 import { Game } from '../../../../shared/src/types.js';
-import { RoleRegistry } from '../roles/RoleRegistry.js';
+import { RoleRegistry } from '../../game/roles/RoleRegistry.js';
 
 /**
  * 剧本集成测试

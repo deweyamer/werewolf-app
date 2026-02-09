@@ -16,8 +16,8 @@ export class ScriptValidator {
     // 1. 验证总人数
     this.validateTotalPlayers(script, errors);
 
-    // 2. 验证阵营平衡
-    this.validateCampBalance(script, errors);
+    // 2. 验证阵营平衡（降级为警告，上帝可自由配置）
+    this.validateCampBalance(script, errors, warnings);
 
     // 3. 验证角色是否存在
     this.validateRolesExist(script, errors);
@@ -36,7 +36,7 @@ export class ScriptValidator {
   }
 
   /**
-   * 验证总人数（必须为12人）
+   * 验证总人数（支持9-18人）
    */
   private validateTotalPlayers(script: ScriptV2, errors: string[]): void {
     const totalPlayers = Object.values(script.roleComposition).reduce(
@@ -44,15 +44,21 @@ export class ScriptValidator {
       0
     );
 
-    if (totalPlayers !== 12) {
-      errors.push(`总人数必须为12人，当前为${totalPlayers}人`);
+    if (totalPlayers < 9 || totalPlayers > 18) {
+      errors.push(`总人数必须在9-18人之间，当前为${totalPlayers}人`);
+    }
+
+    if (totalPlayers !== script.playerCount) {
+      errors.push(`playerCount(${script.playerCount})与角色总数(${totalPlayers})不匹配`);
     }
   }
 
   /**
-   * 验证阵营平衡（4狼8好人）
+   * 验证阵营平衡
+   * - 至少1个狼人（error）
+   * - 狼人数量建议范围（warning，上帝可自由配置）
    */
-  private validateCampBalance(script: ScriptV2, errors: string[]): void {
+  private validateCampBalance(script: ScriptV2, errors: string[], warnings: string[]): void {
     let wolfCount = 0;
     let goodCount = 0;
 
@@ -67,13 +73,28 @@ export class ScriptValidator {
       }
     }
 
-    if (wolfCount !== 4) {
-      errors.push(`狼人阵营必须为4人，当前为${wolfCount}人`);
+    // 硬约束：必须有狼人
+    if (wolfCount === 0) {
+      errors.push('必须至少包含1个狼人阵营角色');
     }
 
-    if (goodCount !== 8) {
-      errors.push(`好人阵营必须为8人，当前为${goodCount}人`);
+    // 软建议：狼人数量范围
+    const totalPlayers = wolfCount + goodCount;
+    const { minWolves, maxWolves } = this.getBalanceRules(totalPlayers);
+
+    if (wolfCount < minWolves || wolfCount > maxWolves) {
+      warnings.push(`${totalPlayers}人局建议狼人数量为${minWolves}-${maxWolves}人，当前为${wolfCount}人`);
     }
+  }
+
+  /**
+   * 根据总人数获取阵营平衡规则
+   */
+  private getBalanceRules(playerCount: number): { minWolves: number; maxWolves: number } {
+    if (playerCount <= 9) return { minWolves: 2, maxWolves: 3 };
+    if (playerCount <= 12) return { minWolves: 3, maxWolves: 4 };
+    if (playerCount <= 15) return { minWolves: 4, maxWolves: 5 };
+    return { minWolves: 5, maxWolves: 6 }; // 16-18人
   }
 
   /**
@@ -92,13 +113,22 @@ export class ScriptValidator {
    * 验证角色组合合理性（警告级别）
    */
   private validateRoleComposition(script: ScriptV2, warnings: string[]): void {
-    // 统计神职数量
+    // 统计神职数量和平民数量
     const godCount = this.countGods(script.roleComposition);
     const villagerCount = script.roleComposition['villager'] || 0;
+    const totalPlayers = script.playerCount;
 
-    // 建议：好人阵营应该是4神4民
-    if (godCount !== 4 || villagerCount !== 4) {
-      warnings.push(`建议配置为4神4民，当前为${godCount}神${villagerCount}民`);
+    // 根据总人数计算建议的神职和平民数量
+    const suggestedGods = Math.floor((totalPlayers - this.getBalanceRules(totalPlayers).minWolves) / 2);
+    const suggestedVillagers = totalPlayers - this.getBalanceRules(totalPlayers).minWolves - suggestedGods;
+
+    // 建议：好人阵营应该是神民平衡
+    if (godCount > suggestedGods + 1) {
+      warnings.push(`${totalPlayers}人局建议神职不超过${suggestedGods + 1}人，当前为${godCount}神`);
+    }
+
+    if (villagerCount < 2) {
+      warnings.push(`建议至少配置2个平民，当前为${villagerCount}民`);
     }
 
     // 检查是否有预言家（强烈建议）
@@ -117,14 +147,15 @@ export class ScriptValidator {
       warnings.push('建议至少包含1个普通狼人');
     }
 
-    // 检查是否有过多特殊狼
-    const specialWolves = ['nightmare', 'wolf_beauty', 'white_wolf', 'black_wolf'];
+    // 检查是否有过多特殊狼（根据总狼人数动态计算）
+    const specialWolves = ['nightmare', 'wolf_beauty', 'white_wolf', 'black_wolf', 'gargoyle'];
     const specialWolfCount = specialWolves.reduce(
       (sum, roleId) => sum + (script.roleComposition[roleId] || 0),
       0
     );
-    if (specialWolfCount > 2) {
-      warnings.push(`特殊狼人过多（${specialWolfCount}个），可能导致狼人过强`);
+    const { maxWolves } = this.getBalanceRules(totalPlayers);
+    if (specialWolfCount > Math.ceil(maxWolves / 2)) {
+      warnings.push(`特殊狼人过多（${specialWolfCount}个），建议不超过${Math.ceil(maxWolves / 2)}个`);
     }
   }
 

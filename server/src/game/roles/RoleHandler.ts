@@ -70,8 +70,67 @@ export abstract class BaseRoleHandler implements IRoleHandler {
     };
   }
 
-  // 默认实现：白天行动
+  // 默认实现：白天行动（狼人阵营通用自爆）
   async handleDayAction(game: Game, action: PlayerAction): Promise<RoleActionResult> {
+    // 狼人阵营通用自爆逻辑
+    if (this.camp === 'wolf' && action.actionType === 'boom') {
+      const wolf = game.players.find(p => p.playerId === action.playerId);
+      if (!wolf || !wolf.alive) {
+        return { success: false, message: '玩家不存在或已死亡' };
+      }
+
+      // 创建自爆效果
+      const effect = this.createSkillEffect(
+        SkillEffectType.SELF_DESTRUCT,
+        SkillPriority.WHITE_WOLF_BOOM,
+        SkillTiming.DAY_ACTION,
+        action.playerId,
+        action.playerId,
+        {
+          message: `${this.roleName}${action.playerId}号自爆，直接进入黑夜`,
+          skipToNight: true,
+        }
+      );
+
+      // 处理警徽
+      const wasSheriff = wolf.isSheriff;
+      if (wasSheriff) {
+        const validTargets = game.players
+          .filter(p => p.alive && p.playerId !== action.playerId)
+          .map(p => p.playerId);
+        game.sheriffBadgeState = 'pending_assign';
+        game.pendingSheriffTransfer = {
+          fromPlayerId: action.playerId,
+          options: validTargets,
+          reason: 'wolf_explosion',
+        };
+        wolf.isSheriff = false;
+        game.sheriffId = 0;
+      }
+
+      // 自爆死亡
+      wolf.alive = false;
+      wolf.outReason = 'self_destruct';
+
+      return {
+        success: true,
+        message: `${this.roleName}自爆成功`,
+        effect,
+        data: {
+          skipToNight: true,
+          sheriffPendingAssign: wasSheriff,
+        },
+      };
+    }
+
+    // 狼人阵营跳过自爆
+    if (this.camp === 'wolf' && action.actionType === 'skip') {
+      return {
+        success: true,
+        message: `${this.roleName}跳过不自爆`,
+      };
+    }
+
     return {
       success: false,
       message: '该角色没有白天行动',

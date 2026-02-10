@@ -441,6 +441,65 @@ export class GameService {
     return true;
   }
 
+  async resolveDeathTrigger(gameId: string, triggerId: string, targetId: number | 'skip'): Promise<{ success: boolean; message: string }> {
+    const game = this.getGame(gameId);
+    if (!game) return { success: false, message: '游戏不存在' };
+
+    const trigger = game.pendingDeathTriggers?.find(t => t.id === triggerId && !t.resolved);
+    if (!trigger) return { success: false, message: '无效的死亡触发' };
+
+    trigger.resolved = true;
+
+    if (targetId === 'skip') {
+      const label = trigger.type === 'hunter_shoot' ? '猎人放弃开枪' : '黑狼王放弃爆炸';
+      game.history.push({
+        id: uuidv4(),
+        timestamp: new Date().toISOString(),
+        round: game.currentRound,
+        phase: game.currentPhase,
+        actorId: 'god',
+        actorPlayerId: trigger.actorId,
+        action: label,
+        result: label,
+        visible: 'god',
+      });
+    } else {
+      const targetPlayer = game.players.find(p => p.playerId === targetId);
+      if (!targetPlayer || !targetPlayer.alive) {
+        trigger.resolved = false;
+        return { success: false, message: '目标无效' };
+      }
+
+      trigger.targetId = targetId;
+      targetPlayer.alive = false;
+      targetPlayer.outReason = trigger.type === 'hunter_shoot' ? 'hunter_shoot' : 'black_wolf_explode';
+
+      if (targetPlayer.isSheriff) {
+        this.votingSystem.handleSheriffDeath(game, targetId, trigger.type);
+      }
+
+      const label = trigger.type === 'hunter_shoot'
+        ? `${trigger.actorId}号猎人开枪带走${targetId}号`
+        : `${trigger.actorId}号黑狼王爆炸带走${targetId}号`;
+
+      game.history.push({
+        id: uuidv4(),
+        timestamp: new Date().toISOString(),
+        round: game.currentRound,
+        phase: game.currentPhase,
+        actorId: 'god',
+        actorPlayerId: trigger.actorId,
+        action: label,
+        target: targetId,
+        result: label,
+        visible: 'god',
+      });
+    }
+
+    await this.saveGames();
+    return { success: true, message: '操作成功' };
+  }
+
   async transferSheriffBadge(gameId: string, targetId: number): Promise<boolean> {
     const game = this.getGame(gameId);
     if (!game) return false;

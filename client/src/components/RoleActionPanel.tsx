@@ -1,3 +1,4 @@
+import { useState } from 'react';
 import { GamePlayer, Game, NightSubPhase } from '../../../shared/src/types';
 import { wsService } from '../services/websocket';
 import { getRoleName, getPhaseLabel } from '../utils/phaseLabels';
@@ -20,8 +21,7 @@ interface RoleActionPanelProps {
   poisonTarget: number;
   setPoisonTarget: (v: number) => void;
   onSubmitAction: () => void;
-  onWitchSubmit: () => void;
-  onConfirmPoison: () => void;
+  onWitchSubmit: (action?: 'save' | 'poison' | 'none', target?: number) => void;
   isSubmitting?: boolean;
 }
 
@@ -118,11 +118,131 @@ function submitAction(game: Game, player: GamePlayer, actionType: string, target
   });
 }
 
+/** 女巫操作面板 */
+function WitchPanel({
+  victim, hasAntidote, hasPoison, canSave, players, isSubmitting,
+  showPoisonModal, setShowPoisonModal, onWitchSubmit,
+}: {
+  victim?: number;
+  hasAntidote: boolean;
+  hasPoison: boolean;
+  canSave: boolean;
+  players: GamePlayer[];
+  isSubmitting: boolean;
+  showPoisonModal: boolean;
+  setShowPoisonModal: (v: boolean) => void;
+  onWitchSubmit: (action?: 'save' | 'poison' | 'none', target?: number) => void;
+}) {
+  const [showAntidoteConfirm, setShowAntidoteConfirm] = useState(false);
+
+  return (
+    <div className={PANEL_CLASS}>
+      <h3 className="text-xl font-bold text-white mb-4">女巫阶段</h3>
+
+      {victim && (
+        <div className="mb-6 p-4 bg-red-600/20 border border-red-500 rounded-lg">
+          <p className="text-white font-bold">昨晚被刀: {victim}号</p>
+        </div>
+      )}
+
+      <div className="mb-6 p-4 bg-white/5 rounded-lg">
+        <div className="flex gap-4 text-sm">
+          <div className={hasAntidote ? 'text-green-400' : 'text-gray-500'}>
+            解药 {hasAntidote ? '✓ 可用' : '✗ 已使用'}
+          </div>
+          <div className={hasPoison ? 'text-red-400' : 'text-gray-500'}>
+            毒药 {hasPoison ? '✓ 可用' : '✗ 已使用'}
+          </div>
+        </div>
+      </div>
+
+      <div className="space-y-3">
+        {/* 使用解药 */}
+        <button
+          onClick={() => setShowAntidoteConfirm(true)}
+          disabled={!canSave || isSubmitting}
+          className={`w-full py-3 rounded-lg font-bold transition ${
+            canSave ? 'bg-green-600 hover:bg-green-700 text-white' : 'bg-gray-600/30 text-gray-500 cursor-not-allowed'
+          }`}
+        >
+          {canSave ? `使用解药救 ${victim} 号` : hasAntidote ? '今晚无人被刀' : '解药已使用'}
+        </button>
+
+        {/* 使用毒药 */}
+        <button
+          onClick={() => setShowPoisonModal(true)}
+          disabled={!hasPoison || isSubmitting}
+          className={`w-full py-3 rounded-lg font-bold transition ${
+            hasPoison ? 'bg-red-600 hover:bg-red-700 text-white' : 'bg-gray-600/30 text-gray-500 cursor-not-allowed'
+          }`}
+        >
+          {hasPoison ? '使用毒药' : '毒药已使用'}
+        </button>
+
+        {/* 什么都不用 */}
+        <button
+          onClick={() => onWitchSubmit('none')}
+          disabled={isSubmitting}
+          className="w-full py-3 bg-gray-600 hover:bg-gray-700 disabled:opacity-50 disabled:cursor-not-allowed text-white font-bold rounded-lg transition"
+        >
+          {isSubmitting ? '提交中...' : '什么都不用'}
+        </button>
+      </div>
+
+      {/* 解药确认弹窗 */}
+      {showAntidoteConfirm && (
+        <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50">
+          <div className="bg-gray-900 border-2 border-green-500 rounded-2xl p-8 max-w-sm w-full mx-4">
+            <h3 className="text-xl font-bold text-white mb-4">确认使用解药</h3>
+            <p className="text-gray-300 mb-6">确认使用解药救 <span className="text-green-400 font-bold">{victim}号</span> ？</p>
+            <div className="flex gap-4">
+              <button
+                onClick={() => { setShowAntidoteConfirm(false); onWitchSubmit('save'); }}
+                disabled={isSubmitting}
+                className="flex-1 py-3 bg-green-600 hover:bg-green-700 disabled:opacity-50 text-white font-bold rounded-lg transition"
+              >确认</button>
+              <button
+                onClick={() => setShowAntidoteConfirm(false)}
+                className="flex-1 py-3 bg-gray-600 hover:bg-gray-700 text-white font-bold rounded-lg transition"
+              >取消</button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* 毒药选人弹窗 */}
+      {showPoisonModal && (
+        <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50">
+          <div className="bg-gray-900 border-2 border-red-500 rounded-2xl p-8 max-w-md w-full mx-4">
+            <h3 className="text-xl font-bold text-white mb-4">选择毒药目标</h3>
+            <div className="grid grid-cols-4 gap-3 mb-4">
+              {players.filter(p => p.alive).map(player => (
+                <button
+                  key={player.playerId}
+                  onClick={() => { setShowPoisonModal(false); onWitchSubmit('poison', player.playerId); }}
+                  disabled={isSubmitting}
+                  className="py-3 bg-red-600/30 hover:bg-red-600 disabled:opacity-50 text-white font-bold rounded-lg transition border border-red-500/50 hover:border-red-500"
+                >
+                  {player.playerId}号
+                </button>
+              ))}
+            </div>
+            <button
+              onClick={() => setShowPoisonModal(false)}
+              className="w-full py-3 bg-gray-600 hover:bg-gray-700 text-white font-bold rounded-lg transition"
+            >取消</button>
+          </div>
+        </div>
+      )}
+    </div>
+  );
+}
+
 export default function RoleActionPanel(props: RoleActionPanelProps) {
   const {
     myPlayer, currentGame, selectedTarget, setSelectedTarget,
     witchAction, setWitchAction, showPoisonModal, setShowPoisonModal,
-    poisonTarget, setPoisonTarget, onSubmitAction, onWitchSubmit, onConfirmPoison,
+    poisonTarget, setPoisonTarget, onSubmitAction, onWitchSubmit,
     isSubmitting = false,
   } = props;
 
@@ -296,43 +416,21 @@ export default function RoleActionPanel(props: RoleActionPanelProps) {
     );
   }
 
-  // 守墓人 - 验尸阶段
+  // 守墓人 - 验尸阶段（自动获取上轮投票出局者的阵营）
   if (role === 'gravekeeper' && phase === 'gravekeeper') {
     return (
       <div className={PANEL_CLASS}>
         <h3 className="text-xl font-bold text-white mb-4">⚰️ 验尸阶段 - 守墓人</h3>
-        <p className="text-gray-300 mb-6">选择一名已出局的玩家，查验其具体角色身份。</p>
-        <div className="space-y-4">
-          <div>
-            <label className="block text-white text-sm font-medium mb-2">选择验尸目标</label>
-            <select
-              value={selectedTarget}
-              onChange={(e) => setSelectedTarget(Number(e.target.value))}
-              className="w-full px-4 py-2 bg-gray-800 border border-gray-500/50 rounded-lg text-white focus:border-gray-400 focus:outline-none"
-            >
-              <option value={0} className="bg-gray-800 text-white">请选择目标...</option>
-              {currentGame.players
-                .filter((p) => !p.alive)
-                .map((player) => (
-                  <option key={player.playerId} value={player.playerId} className="bg-gray-800 text-white">
-                    {player.playerId}号 - {player.username}（已出局）
-                  </option>
-                ))}
-            </select>
-          </div>
-          <ActionButtons
-            onSubmit={onSubmitAction}
-            submitDisabled={selectedTarget === 0}
-            submitLabel="确认验尸"
-            submitColor="purple"
-            isLoading={isSubmitting}
-            onSkip={() => {
-              setSelectedTarget(0);
-              submitAction(currentGame, myPlayer, 'skip', 0);
-            }}
-            skipLabel="放弃验尸"
-          />
-        </div>
+        <p className="text-gray-300 mb-6">
+          自动获取上一轮被投票出局玩家的阵营（好人/坏人）。点击确认查看结果。
+        </p>
+        <button
+          onClick={() => submitAction(currentGame, myPlayer, 'check', 0)}
+          disabled={isSubmitting}
+          className="w-full py-3 bg-purple-600 hover:bg-purple-700 disabled:opacity-50 disabled:cursor-not-allowed text-white font-bold rounded-lg transition"
+        >
+          {isSubmitting ? '查询中...' : '确认验尸'}
+        </button>
       </div>
     );
   }
@@ -369,114 +467,25 @@ export default function RoleActionPanel(props: RoleActionPanelProps) {
     );
   }
 
-  // 女巫 - 用药阶段 (保留原有完整的复杂 UI)
+  // 女巫 - 用药阶段
   if (role === 'witch' && phase === 'witch') {
+    const victim = currentGame.nightActions.witchKnowsVictim;
+    const hasAntidote = !!myPlayer.abilities.antidote;
+    const hasPoison = !!myPlayer.abilities.poison;
+    const canSave = hasAntidote && !!victim;
+
     return (
-      <div className={PANEL_CLASS}>
-        <h3 className="text-xl font-bold text-white mb-4">🧪 女巫阶段</h3>
-
-        {currentGame.nightActions.witchKnowsVictim && (
-          <div className="mb-6 p-4 bg-red-600/20 border border-red-500 rounded-lg">
-            <p className="text-white font-bold">昨晚被刀: {currentGame.nightActions.witchKnowsVictim}号</p>
-          </div>
-        )}
-
-        <div className="mb-6 p-4 bg-white/5 rounded-lg">
-          <h4 className="text-white font-bold mb-2">你的技能状态</h4>
-          <div className="flex gap-4 text-sm">
-            <div className={myPlayer.abilities.antidote ? 'text-green-400' : 'text-gray-500'}>
-              解药 {myPlayer.abilities.antidote ? '✓ 可用' : '✗ 已使用'}
-            </div>
-            <div className={myPlayer.abilities.poison ? 'text-red-400' : 'text-gray-500'}>
-              毒药 {myPlayer.abilities.poison ? '✓ 可用' : '✗ 已使用'}
-            </div>
-          </div>
-        </div>
-
-        <div className="mb-6">
-          <h4 className="text-white font-bold mb-3">💊 解药</h4>
-          <div className="flex gap-4">
-            <button
-              onClick={() => setWitchAction('antidote')}
-              disabled={!myPlayer.abilities.antidote || witchAction === 'poison'}
-              className={`flex-1 py-3 rounded-lg font-bold transition ${
-                witchAction === 'antidote' ? 'bg-green-600 text-white'
-                : myPlayer.abilities.antidote && witchAction !== 'poison' ? 'bg-green-600/30 hover:bg-green-600/50 text-white'
-                : 'bg-gray-600/30 text-gray-500 cursor-not-allowed'
-              }`}
-            >使用解药</button>
-            <button
-              onClick={() => setWitchAction('none')}
-              disabled={witchAction === 'poison'}
-              className={`flex-1 py-3 rounded-lg font-bold transition ${
-                witchAction === 'none' ? 'bg-gray-600 text-white'
-                : witchAction !== 'poison' ? 'bg-gray-600/30 hover:bg-gray-600/50 text-white'
-                : 'bg-gray-600/30 text-gray-500 cursor-not-allowed'
-              }`}
-            >不使用</button>
-          </div>
-        </div>
-
-        <div className="mb-6">
-          <h4 className="text-white font-bold mb-3">☠️ 毒药</h4>
-          <div className="flex gap-4">
-            <button
-              onClick={() => { setWitchAction('poison'); setShowPoisonModal(true); }}
-              disabled={!myPlayer.abilities.poison || witchAction === 'antidote'}
-              className={`flex-1 py-3 rounded-lg font-bold transition ${
-                witchAction === 'poison' ? 'bg-red-600 text-white'
-                : myPlayer.abilities.poison && witchAction !== 'antidote' ? 'bg-red-600/30 hover:bg-red-600/50 text-white'
-                : 'bg-gray-600/30 text-gray-500 cursor-not-allowed'
-              }`}
-            >使用毒药</button>
-            <button
-              onClick={() => setWitchAction('none')}
-              disabled={witchAction === 'antidote'}
-              className={`flex-1 py-3 rounded-lg font-bold transition ${
-                witchAction === 'none' ? 'bg-gray-600 text-white'
-                : witchAction !== 'antidote' ? 'bg-gray-600/30 hover:bg-gray-600/50 text-white'
-                : 'bg-gray-600/30 text-gray-500 cursor-not-allowed'
-              }`}
-            >不使用</button>
-          </div>
-        </div>
-
-        <button
-          onClick={onWitchSubmit}
-          disabled={isSubmitting}
-          className="w-full py-3 bg-purple-600 hover:bg-purple-700 disabled:bg-gray-600 disabled:cursor-not-allowed text-white font-bold rounded-lg transition"
-        >{isSubmitting ? '提交中...' : '提交操作'}</button>
-
-        {showPoisonModal && (
-          <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50">
-            <div className="bg-gray-900 border-2 border-red-500 rounded-2xl p-8 max-w-md w-full mx-4">
-              <h3 className="text-2xl font-bold text-white mb-4">选择毒药目标</h3>
-              <div className="mb-6">
-                <label className="block text-white text-sm font-medium mb-2">选择要毒死的玩家</label>
-                <select
-                  value={poisonTarget}
-                  onChange={(e) => setPoisonTarget(Number(e.target.value))}
-                  className="w-full px-4 py-3 bg-gray-800 border border-red-500/50 rounded-lg text-white focus:border-red-500 focus:outline-none"
-                >
-                  <option value={0} className="bg-gray-800 text-white">请选择...</option>
-                  {currentGame.players.filter((p) => p.alive).map((player) => (
-                    <option key={player.playerId} value={player.playerId} className="bg-gray-800 text-white">
-                      {player.playerId}号 - {player.username}
-                    </option>
-                  ))}
-                </select>
-              </div>
-              <div className="flex gap-4">
-                <button onClick={onConfirmPoison} className="flex-1 py-3 bg-red-600 hover:bg-red-700 text-white font-bold rounded-lg transition">确认</button>
-                <button
-                  onClick={() => { setShowPoisonModal(false); setWitchAction('none'); setPoisonTarget(0); }}
-                  className="flex-1 py-3 bg-gray-600 hover:bg-gray-700 text-white font-bold rounded-lg transition"
-                >取消</button>
-              </div>
-            </div>
-          </div>
-        )}
-      </div>
+      <WitchPanel
+        victim={victim}
+        hasAntidote={hasAntidote}
+        hasPoison={hasPoison}
+        canSave={canSave}
+        players={currentGame.players}
+        isSubmitting={isSubmitting}
+        showPoisonModal={showPoisonModal}
+        setShowPoisonModal={setShowPoisonModal}
+        onWitchSubmit={onWitchSubmit}
+      />
     );
   }
 
@@ -523,6 +532,36 @@ export default function RoleActionPanel(props: RoleActionPanelProps) {
             submitColor="red"
             isLoading={isSubmitting}
           />
+        </div>
+      </div>
+    );
+  }
+
+  // 狼人阵营 - 讨论阶段自爆（狼美人和黑狼王不能自爆）
+  const canBoom = myPlayer.camp === 'wolf' && role !== 'wolf_beauty' && role !== 'black_wolf' && role !== 'gargoyle' && role !== 'nightmare';
+  if (canBoom && phase === 'discussion') {
+    return (
+      <div className={PANEL_CLASS}>
+        <h3 className="text-xl font-bold text-white mb-4">狼人自爆</h3>
+        <p className="text-gray-300 mb-4">
+          自爆后你将立即死亡，跳过白天直接进入黑夜。
+          {myPlayer.isSheriff ? '你是当前警长，自爆后警徽将由上帝指定传递。' : ''}
+        </p>
+        <div className="flex gap-3">
+          <button
+            onClick={() => submitAction(currentGame, myPlayer, 'boom', 0)}
+            disabled={isSubmitting}
+            className="flex-1 py-3 bg-red-600 hover:bg-red-700 disabled:opacity-50 disabled:cursor-not-allowed text-white font-bold rounded-lg transition"
+          >
+            确认自爆
+          </button>
+          <button
+            onClick={() => submitAction(currentGame, myPlayer, 'skip', 0)}
+            disabled={isSubmitting}
+            className="flex-1 py-3 bg-gray-600 hover:bg-gray-700 disabled:opacity-50 disabled:cursor-not-allowed text-white font-bold rounded-lg transition"
+          >
+            不使用
+          </button>
         </div>
       </div>
     );

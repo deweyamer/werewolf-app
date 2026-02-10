@@ -46,6 +46,9 @@ export default function PlayerView() {
           if (message.data?.seerResult) {
             const seerInfo = message.data.seerResult;
             toast(`查验结果：${seerInfo.message}`, 'info', 6000);
+          } else if (message.data?.gravekeeperResult) {
+            const gkInfo = message.data.gravekeeperResult;
+            toast(`验尸结果：${gkInfo.message}`, 'info', 6000);
           } else if (message.data?.victimInfo) {
             // 女巫的被刀信息在UI中显示，不需要toast
           } else {
@@ -107,42 +110,30 @@ export default function PlayerView() {
   };
 
   // 女巫提交操作
-  const handleWitchSubmit = () => {
+  const handleWitchSubmit = (
+    actionOverride?: 'save' | 'poison' | 'none',
+    targetOverride?: number
+  ) => {
     if (!myPlayer || !currentGame || isSubmitting) return;
     setIsSubmitting(true);
 
-    let actionType = 'none';
-    let target = 0;
+    const actionType = actionOverride ?? 'none';
+    const target = targetOverride ?? (actionType === 'save'
+      ? (currentGame.nightActions.witchKnowsVictim || 0)
+      : 0);
 
-    if (witchAction === 'antidote') {
-      actionType = 'save';
-      target = currentGame.nightActions.witchKnowsVictim || 0;
-    } else if (witchAction === 'poison') {
-      actionType = 'poison';
-      target = poisonTarget;
-    }
+    wsService.send({
+      type: 'PLAYER_SUBMIT_ACTION',
+      action: {
+        phase: currentGame.currentPhase,
+        playerId: myPlayer.playerId,
+        actionType,
+        target,
+      },
+    });
 
-    const action = {
-      phase: currentGame.currentPhase,
-      playerId: myPlayer.playerId,
-      actionType,
-      target,
-    };
-
-    wsService.send({ type: 'PLAYER_SUBMIT_ACTION', action });
-
-    // 重置状态
     setWitchAction('none');
     setPoisonTarget(0);
-    setShowPoisonModal(false);
-  };
-
-  // 确认毒药目标
-  const handleConfirmPoison = () => {
-    if (poisonTarget === 0) {
-      toast('请选择毒药目标', 'warning');
-      return;
-    }
     setShowPoisonModal(false);
   };
 
@@ -414,7 +405,6 @@ export default function PlayerView() {
                 setPoisonTarget={setPoisonTarget}
                 onSubmitAction={handleSubmitAction}
                 onWitchSubmit={handleWitchSubmit}
-                onConfirmPoison={handleConfirmPoison}
                 isSubmitting={isSubmitting}
               />
             )}

@@ -142,14 +142,12 @@ export default function DevRoleSandbox() {
     setSelectedTarget(0);
   }, [phaseOverride, selectedTarget, addLog]);
 
-  const handleWitchSubmit = useCallback(() => {
-    const actionType = witchAction === 'antidote' ? 'save' : witchAction === 'poison' ? 'poison' : 'none';
-    const target =
-      witchAction === 'antidote'
-        ? witchKnowsVictim
-        : witchAction === 'poison'
-          ? poisonTarget
-          : 0;
+  const handleWitchSubmit = useCallback((
+    actionOverride?: 'save' | 'poison' | 'none',
+    targetOverride?: number
+  ) => {
+    const actionType = actionOverride ?? 'none';
+    const target = targetOverride ?? (actionType === 'save' ? witchKnowsVictim : 0);
     addLog('callback', {
       type: 'PLAYER_SUBMIT_ACTION',
       action: {
@@ -162,12 +160,7 @@ export default function DevRoleSandbox() {
     setWitchAction('none');
     setPoisonTarget(0);
     setShowPoisonModal(false);
-  }, [witchAction, witchKnowsVictim, poisonTarget, addLog]);
-
-  const handleConfirmPoison = useCallback(() => {
-    if (poisonTarget === 0) return;
-    setShowPoisonModal(false);
-  }, [poisonTarget]);
+  }, [witchKnowsVictim, addLog]);
 
   // 角色切换时重置状态
   const handleRoleChange = useCallback((roleId: string) => {
@@ -369,7 +362,6 @@ export default function DevRoleSandbox() {
                 setPoisonTarget={setPoisonTarget}
                 onSubmitAction={handleSubmitAction}
                 onWitchSubmit={handleWitchSubmit}
-                onConfirmPoison={handleConfirmPoison}
                 isSubmitting={false}
               />
             </div>

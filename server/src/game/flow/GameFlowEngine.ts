@@ -1,5 +1,5 @@
 import { v4 as uuidv4 } from 'uuid';
-import { Game, GamePhase, GamePlayer, PlayerAction, ActionLog } from '../../../../shared/src/types.js';
+import { Game, GamePhase, GamePlayer, PlayerAction, ActionLog, PendingDeathTrigger } from '../../../../shared/src/types.js';
 import { ROLE_INFO } from '../../../../shared/src/constants.js';
 import { SkillResolver } from '../skill/SkillResolver.js';
 import { PhaseResult, ActionResult, SettleResult, SkillEffect, SkillEffectType, SkillPriority, SkillTiming, DeathReason } from '../skill/SkillTypes.js';
@@ -111,6 +111,9 @@ export class GameFlowEngine {
         await this.processDeathTrigger(game, deadPlayer, settleResult);
       }
 
+      // 将待处理效果存储到 game 对象，供前端显示
+      this.storePendingDeathTriggers(game, settleResult);
+
       // 保存本回合夜间操作到历史记录
       this.saveRoundHistory(game, settleResult.deaths, settleResult.messages.join('\n'));
 
@@ -159,6 +162,9 @@ export class GameFlowEngine {
         // 处理死亡触发技能（如猎人开枪、黑狼王爆炸）
         await this.processDeathTrigger(game, deadPlayer, settleResult);
       }
+
+      // 将待处理效果存储到 game 对象，供前端显示
+      this.storePendingDeathTriggers(game, settleResult);
 
       // 清除恐惧状态（恐惧持续完整一个白天+夜晚回合，在白天结算后清除）
       game.players.forEach(p => {
@@ -385,6 +391,28 @@ export class GameFlowEngine {
     if (pendingEffect) {
       settleResult.pendingEffects.push(pendingEffect);
     }
+  }
+
+  /**
+   * 将待处理死亡触发效果存储到 game 对象，供前端显示和上帝操作
+   */
+  private storePendingDeathTriggers(game: Game, settleResult: SettleResult): void {
+    if (settleResult.pendingEffects.length === 0) return;
+
+    const triggers: PendingDeathTrigger[] = settleResult.pendingEffects.map(effect => {
+      const actor = game.players.find(p => p.playerId === effect.actorId);
+      const isHunter = effect.type === SkillEffectType.KILL && effect.priority === SkillPriority.HUNTER_SHOOT;
+      return {
+        id: effect.id,
+        type: isHunter ? 'hunter_shoot' as const : 'black_wolf_explode' as const,
+        actorId: effect.actorId,
+        actorRole: actor?.role || 'unknown',
+        message: effect.data?.message || '',
+        resolved: false,
+      };
+    });
+
+    game.pendingDeathTriggers = [...(game.pendingDeathTriggers || []), ...triggers];
   }
 
   /**

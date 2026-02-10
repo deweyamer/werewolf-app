@@ -27,7 +27,6 @@ function defaultProps(overrides?: Partial<{
   setPoisonTarget: ReturnType<typeof vi.fn>;
   onSubmitAction: ReturnType<typeof vi.fn>;
   onWitchSubmit: ReturnType<typeof vi.fn>;
-  onConfirmPoison: ReturnType<typeof vi.fn>;
   isSubmitting: boolean;
 }>) {
   const players = [
@@ -50,7 +49,6 @@ function defaultProps(overrides?: Partial<{
     setPoisonTarget: overrides?.setPoisonTarget ?? vi.fn(),
     onSubmitAction: overrides?.onSubmitAction ?? vi.fn(),
     onWitchSubmit: overrides?.onWitchSubmit ?? vi.fn(),
-    onConfirmPoison: overrides?.onConfirmPoison ?? vi.fn(),
     isSubmitting: overrides?.isSubmitting ?? false,
   };
 }

@@ -40,6 +40,9 @@ export const ROLE_ABILITY_CONTROLS: Record<string, ControlDef[]> = {
   guard: [
     { key: 'lastGuardTarget', label: '上晚守护目标', type: 'number' },
   ],
+  white_wolf: [
+    { key: 'whiteWolfBoomUsed', label: '自爆已使用', type: 'toggle' },
+  ],
 };
 
 // 每个角色的默认技能状态

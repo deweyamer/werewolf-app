@@ -33,9 +33,9 @@ export class WitchHandler extends BaseRoleHandler {
       return { success: false, message: '女巫本轮已提交操作，不能再次使用技能' };
     }
 
-    // 女巫知道被刀的人
+    // 只有解药还在时才告知被刀者
     let victimInfo = game.nightActions.wolfKill;
-    if (victimInfo && !game.nightActions.witchKnowsVictim) {
+    if (victimInfo && !game.nightActions.witchKnowsVictim && witch.abilities.antidote) {
       game.nightActions.witchKnowsVictim = victimInfo;
     }
 

@@ -10,7 +10,7 @@ export class WolfHandler extends BaseRoleHandler {
   roleName = '普通狼人';
   camp = 'wolf' as const;
   hasNightAction = true;
-  hasDayAction = false;
+  hasDayAction = true; // 自爆
   hasDeathTrigger = false;
   canSkip = false; // 必须刀人
 

@@ -129,8 +129,8 @@ export const ROLE_INFO: { [roleId: string]: RoleInfo } = {
     name: '守墓人',
     camp: 'good',
     type: 'god',
-    description: '可以验尸得知死者身份',
-    abilities: ['验尸查验'],
+    description: '自动获得上一轮被投票出局者的阵营（好人/坏人）',
+    abilities: ['自动验尸'],
   },
 
   // 平民

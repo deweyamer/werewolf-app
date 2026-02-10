@@ -507,15 +507,90 @@ export default function GodConsole() {
                 return <ExileVotePanel currentGame={currentGame} />;
               }
               if (phase === 'discussion') {
+                const aliveWolves = currentGame.players.filter(p => p.camp === 'wolf' && p.alive && p.role !== 'wolf_beauty' && p.role !== 'black_wolf' && p.role !== 'gargoyle' && p.role !== 'nightmare');
+                const pending = currentGame.pendingSheriffTransfer;
                 return (
-                  <div className="p-4 sm:p-6 bg-amber-500/10 border border-amber-500/30 rounded-xl">
-                    <h4 className="text-base sm:text-lg font-bold text-amber-300 mb-2">白天讨论阶段</h4>
-                    <p className="text-gray-300 text-xs sm:text-sm">请主持玩家依次发言，发言结束后点击「下一阶段」进行投票。</p>
+                  <div className="space-y-3">
+                    <div className="p-4 sm:p-6 bg-amber-500/10 border border-amber-500/30 rounded-xl">
+                      <h4 className="text-base sm:text-lg font-bold text-amber-300 mb-2">白天讨论阶段</h4>
+                      <p className="text-gray-300 text-xs sm:text-sm">请主持玩家依次发言，发言结束后点击「下一阶段」进行投票。</p>
+                      {aliveWolves.length > 0 && (
+                        <div className="mt-3 p-3 bg-red-500/10 border border-red-500/30 rounded-lg">
+                          <p className="text-red-300 text-xs sm:text-sm">
+                            狼人可在讨论阶段自爆（{aliveWolves.map(w => `${w.playerId}号`).join('、')}）
+                          </p>
+                        </div>
+                      )}
+                    </div>
+                    {pending?.reason === 'wolf_explosion' && (
+                      <div className="p-4 sm:p-6 bg-red-600/20 rounded-xl border border-red-500">
+                        <h4 className="text-base sm:text-lg font-bold text-red-400 mb-2">狼人自爆 - 请指定警徽归属</h4>
+                        <p className="text-gray-300 text-xs sm:text-sm mb-4">
+                          警长 {pending.fromPlayerId}号自爆，请指定警徽给谁
+                        </p>
+                        <div className="grid grid-cols-4 gap-3 mb-3">
+                          {pending.options.map(playerId => {
+                            const player = currentGame.players.find(p => p.playerId === playerId);
+                            return (
+                              <button
+                                key={playerId}
+                                onClick={() => wsService.send({ type: 'GOD_ASSIGN_SHERIFF', targetId: playerId })}
+                                className="p-3 bg-yellow-600/30 hover:bg-yellow-600/50 border border-yellow-500 rounded-lg transition"
+                              >
+                                <div className="text-white font-bold text-sm">{playerId}号</div>
+                                <div className="text-gray-300 text-xs">{player?.username}</div>
+                              </button>
+                            );
+                          })}
+                        </div>
+                        <button
+                          onClick={() => wsService.send({ type: 'GOD_ASSIGN_SHERIFF', targetId: 'none' })}
+                          className="w-full py-2 bg-gray-600/30 hover:bg-gray-600/50 border border-gray-500 text-gray-300 text-sm rounded-lg transition"
+                        >
+                          不给警徽
+                        </button>
+                      </div>
+                    )}
                   </div>
                 );
               }
               if (phase === 'settle' || phase === 'daySettle') {
-                return <NightDeathNotification currentGame={currentGame} />;
+                const unresolvedTriggers = (currentGame.pendingDeathTriggers || []).filter(t => !t.resolved);
+                return (
+                  <div className="space-y-4">
+                    <NightDeathNotification currentGame={currentGame} />
+                    {unresolvedTriggers.map(trigger => {
+                      const alivePlayers = currentGame.players.filter(p => p.alive && p.playerId !== trigger.actorId);
+                      const isHunter = trigger.type === 'hunter_shoot';
+                      const label = isHunter ? '猎人开枪' : '黑狼王爆炸';
+                      return (
+                        <div key={trigger.id} className={`p-4 sm:p-6 rounded-xl border-2 ${isHunter ? 'bg-orange-500/10 border-orange-500' : 'bg-purple-500/10 border-purple-500'}`}>
+                          <h4 className={`text-lg font-bold mb-2 ${isHunter ? 'text-orange-300' : 'text-purple-300'}`}>
+                            {isHunter ? '🏹' : '💥'} {trigger.actorId}号{label} — 请指定目标
+                          </h4>
+                          <p className="text-gray-300 text-sm mb-4">{trigger.message}</p>
+                          <div className="grid grid-cols-4 gap-3 mb-3">
+                            {alivePlayers.map(p => (
+                              <button
+                                key={p.playerId}
+                                onClick={() => wsService.send({ type: 'GOD_RESOLVE_DEATH_TRIGGER', triggerId: trigger.id, targetId: p.playerId })}
+                                className={`py-3 text-white font-bold rounded-lg transition border ${isHunter ? 'bg-orange-600/30 hover:bg-orange-600 border-orange-500/50 hover:border-orange-500' : 'bg-purple-600/30 hover:bg-purple-600 border-purple-500/50 hover:border-purple-500'}`}
+                              >
+                                {p.playerId}号
+                              </button>
+                            ))}
+                          </div>
+                          <button
+                            onClick={() => wsService.send({ type: 'GOD_RESOLVE_DEATH_TRIGGER', triggerId: trigger.id, targetId: 'skip' })}
+                            className="w-full py-3 bg-gray-600 hover:bg-gray-700 text-white font-bold rounded-lg transition"
+                          >
+                            {isHunter ? '放弃开枪' : '放弃爆炸'}
+                          </button>
+                        </div>
+                      );
+                    })}
+                  </div>
+                );
               }
               if (phase === 'hunter' || phase === 'knight') {
                 return (

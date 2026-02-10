@@ -293,24 +293,16 @@ export class BotService {
   }
 
   /**
-   * 守墓人决策：随机选择一个被放逐的玩家验尸
+   * 守墓人决策：自动获取上轮投票出局者阵营，无需选择目标
    */
   private gravekeeperDecision(player: GamePlayer, game: Game): PlayerAction {
-    // 守墓人只能验尸被放逐的玩家
-    const exiledPlayers = game.players.filter(p => !p.alive && p.outReason === 'exile');
-    const target = this.randomPick(exiledPlayers);
-
-    if (target) {
-      console.log(`[Bot] 守墓人(${player.playerId}号) 验尸 ${target.playerId}号`);
-    } else {
-      console.log(`[Bot] 守墓人(${player.playerId}号) 无可验尸目标`);
-    }
+    console.log(`[Bot] 守墓人(${player.playerId}号) 自动验尸`);
 
     return {
       phase: 'gravekeeper',
       playerId: player.playerId,
-      actionType: 'action',
-      target: target?.playerId || 0,
+      actionType: 'check',
+      target: 0,
     };
   }
 

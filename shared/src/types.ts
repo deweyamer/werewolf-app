@@ -276,6 +276,17 @@ export interface RoundHistoryEntry {
   settlementMessage?: string;  // 结算信息
 }
 
+// 待处理的死亡触发效果
+export interface PendingDeathTrigger {
+  id: string;
+  type: 'hunter_shoot' | 'black_wolf_explode';
+  actorId: number;       // 触发者（猎人/黑狼王）号位
+  actorRole: string;     // 触发者角色
+  message: string;       // 提示信息
+  resolved: boolean;     // 是否已处理
+  targetId?: number;     // 上帝指定的目标（0 或 undefined = 未指定）
+}
+
 export interface Game {
   id: string;
   roomCode: string; // 6位房间码
@@ -310,6 +321,9 @@ export interface Game {
 
   // 历史回合记录（用于上帝视角查看历史）
   roundHistory?: RoundHistoryEntry[];
+
+  // 待处理的死亡触发效果（猎人开枪、黑狼王爆炸等）
+  pendingDeathTriggers?: PendingDeathTrigger[];
 
   createdAt: string;
   startedAt?: string;
@@ -356,7 +370,9 @@ export type ClientMessage =
   | { type: 'GOD_ASSIGN_SHERIFF', targetId: number | 'none' } // 上帝指定警长（平票或狼人自爆）
   // 放逐投票相关
   | { type: 'EXILE_VOTE', targetId: number | 'skip' } // 放逐投票
-  | { type: 'EXILE_PK_VOTE', targetId: number | 'skip' }; // 平票PK投票
+  | { type: 'EXILE_PK_VOTE', targetId: number | 'skip' } // 平票PK投票
+  // 死亡触发相关
+  | { type: 'GOD_RESOLVE_DEATH_TRIGGER', triggerId: string, targetId: number | 'skip' }; // 上帝处理猎人开枪/黑狼王爆炸
 
 export interface PlayerAction {
   phase: GamePhase;

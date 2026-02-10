@@ -4,12 +4,12 @@ import {
   SkillEffectType,
   SkillPriority,
   SkillTiming,
-  DeathReason,
 } from '../skill/SkillTypes.js';
 
 /**
  * 守墓人Handler
- * 夜间验尸，查验前一晚死者的真实身份
+ * 自动获得上一轮被投票出局玩家的阵营（好人/坏人）
+ * 无需手动选择目标，被动获取信息
  */
 export class GravekeeperHandler extends BaseRoleHandler {
   roleId = 'gravekeeper';
@@ -18,55 +18,53 @@ export class GravekeeperHandler extends BaseRoleHandler {
   hasNightAction = true;
   hasDayAction = false;
   hasDeathTrigger = false;
-  canSkip = true; // 如果没有死者可以跳过
+  canSkip = true;
+
+  /**
+   * 查找上一轮被投票出局的玩家
+   */
+  private findLastExiledPlayer(game: Game): GamePlayer | null {
+    const prevRound = game.currentRound - 1;
+    if (prevRound < 1 || !game.roundHistory) return null;
+
+    const prevEntry = game.roundHistory.find(h => h.round === prevRound);
+    if (!prevEntry?.exileVote?.result || typeof prevEntry.exileVote.result !== 'number') {
+      return null;
+    }
+
+    const exiledId = prevEntry.exileVote.result;
+    return game.players.find(p => p.playerId === exiledId) || null;
+  }
 
   async handleNightAction(game: Game, action: PlayerAction): Promise<RoleActionResult> {
-    const target = action.target;
+    // 守墓人自动获取上一轮被投票出局者的阵营
+    const exiledPlayer = this.findLastExiledPlayer(game);
 
-    if (!target) {
-      return { success: false, message: '必须选择验尸目标' };
-    }
-
-    // 检查目标是否已死亡
-    const targetPlayer = game.players.find(p => p.playerId === target);
-    if (!targetPlayer) {
-      return { success: false, message: '目标不存在' };
-    }
-
-    if (targetPlayer.alive) {
-      return { success: false, message: '只能验尸已死亡的玩家' };
-    }
-
-    // 守墓人只能验尸白天投票出局的玩家，不能验尸夜晚死亡或自爆的玩家
-    if (targetPlayer.outReason !== DeathReason.EXILE) {
+    if (!exiledPlayer) {
       return {
-        success: false,
-        message: '守墓人只能验尸白天投票出局的玩家'
+        success: true,
+        message: '上一轮没有玩家被投票出局',
+        data: {
+          gravekeeperResult: {
+            hasExile: false,
+            message: '上一轮没有玩家被投票出局，无验尸信息',
+          },
+        },
       };
     }
 
-    // 获取可验尸的玩家列表（只有投票出局的）
-    const exiledPlayers = game.players.filter(
-      p => !p.alive && p.outReason === DeathReason.EXILE
-    );
-    if (exiledPlayers.length === 0) {
-      return {
-        success: false,
-        message: '当前没有可验尸的玩家（只能验尸投票出局者）',
-      };
-    }
+    const campLabel = exiledPlayer.camp === 'wolf' ? '坏人' : '好人';
 
-    // 创建验尸技能效果（类似查验）
+    // 创建验尸技能效果
     const effect = this.createSkillEffect(
       SkillEffectType.CHECK,
       SkillPriority.GRAVEKEEPER,
       SkillTiming.NIGHT_ACTION,
       action.playerId,
-      target,
+      exiledPlayer.playerId,
       {
-        result: targetPlayer.camp,
-        role: targetPlayer.role,
-        message: `${target}号的身份是${targetPlayer.role}，阵营是${targetPlayer.camp === 'wolf' ? '狼人' : '好人'}`,
+        result: exiledPlayer.camp,
+        message: `${exiledPlayer.playerId}号是${campLabel}`,
       }
     );
 
@@ -75,19 +73,19 @@ export class GravekeeperHandler extends BaseRoleHandler {
       message: '验尸成功',
       effect,
       data: {
-        playerId: target,
-        role: targetPlayer.role,
-        camp: targetPlayer.camp,
-        message: `${target}号的身份是${targetPlayer.role}`,
+        gravekeeperResult: {
+          hasExile: true,
+          playerId: exiledPlayer.playerId,
+          camp: exiledPlayer.camp,
+          message: `${exiledPlayer.playerId}号是${campLabel}`,
+        },
       },
     };
   }
 
   getValidTargets(game: Game, playerId: number): number[] {
-    // 只有白天投票出局的玩家可以被验尸
-    return game.players
-      .filter(p => !p.alive && p.outReason === DeathReason.EXILE)
-      .map(p => p.playerId);
+    // 守墓人无需选择目标，返回空
+    return [];
   }
 
   initializeAbilities(player: GamePlayer): void {

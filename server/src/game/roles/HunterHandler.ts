@@ -55,8 +55,9 @@ export class HunterHandler extends BaseRoleHandler {
   }
 
   async onDeath(game: Game, hunter: GamePlayer, deathReason: string): Promise<SkillEffect | null> {
-    // 毒死不能开枪
-    if (deathReason === DeathReason.POISON) {
+    // 只有常规死亡方式可以开枪：被刀、被投票、被开枪
+    const canShoot = [DeathReason.WOLF_KILL, DeathReason.EXILE, DeathReason.HUNTER_SHOOT].includes(deathReason as DeathReason);
+    if (!canShoot) {
       return null;
     }
 

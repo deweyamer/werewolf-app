@@ -167,6 +167,10 @@ export class SocketManager {
         await this.handleGodSheriffTallyVotes(socket, send);
         break;
 
+      case 'GOD_RESOLVE_DEATH_TRIGGER':
+        await this.handleGodResolveDeathTrigger(socket, message.triggerId, message.targetId, send);
+        break;
+
       default:
         send({ type: 'ERROR', message: '未知的消息类型' });
     }
@@ -939,6 +943,50 @@ export class SocketManager {
     } else {
       send({ type: 'ERROR', message: '指定失败' });
     }
+  }
+
+  // ================= 上帝处理死亡触发 =================
+
+  private async handleGodResolveDeathTrigger(
+    socket: Socket,
+    triggerId: string,
+    targetId: number | 'skip',
+    send: (msg: ServerMessage) => void
+  ) {
+    const user = this.socketUsers.get(socket.id);
+    if (!user || user.role !== 'god') {
+      send({ type: 'ERROR', message: '需要上帝权限' });
+      return;
+    }
+
+    const rooms = Array.from(socket.rooms);
+    const gameRoom = rooms.find(r => r !== socket.id);
+    if (!gameRoom) {
+      send({ type: 'ERROR', message: '未加入房间' });
+      return;
+    }
+
+    const game = this.gameService.getGame(gameRoom);
+    if (!game) {
+      send({ type: 'ERROR', message: '游戏不存在' });
+      return;
+    }
+
+    const result = await this.gameService.resolveDeathTrigger(game.id, triggerId, targetId);
+    if (!result.success) {
+      send({ type: 'ERROR', message: result.message });
+      return;
+    }
+
+    const updatedGame = this.gameService.getGame(game.id);
+    if (updatedGame) {
+      this.io.to(game.id).emit('message', {
+        type: 'GAME_STATE_UPDATE',
+        game: updatedGame,
+      } as ServerMessage);
+    }
+
+    send({ type: 'ACTION_RESULT', success: true, message: result.message });
   }
 
   // ================= 上帝控制警长竞选阶段 =================

@@ -174,8 +174,8 @@ export class BotService {
     const lastTarget = player.abilities?.lastGuardTarget;
     const targets = game.players.filter(p => {
       if (!p.alive) return false;
-      // 不能连续守护同一人
-      if (p.playerId === lastTarget) return false;
+      // 不能连续守护同一人（lastGuardTarget 为 0 表示空手，不排除任何人）
+      if (lastTarget && p.playerId === lastTarget) return false;
       return true;
     });
 

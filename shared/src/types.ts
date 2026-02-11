@@ -162,7 +162,8 @@ export interface GamePlayer {
     dreamKillReady?: boolean; // 摄梦人是否准备好梦死目标(连续2晚)
 
     // 守卫
-    lastGuardTarget?: number; // 守卫上次守护的目标
+    lastGuardTarget?: number; // 守卫上次守护的目标（向后兼容）
+    guardHistory?: number[]; // 守卫守护历史记录（0 表示空手/放弃守护）
 
     // 骑士
     knightDuelUsed?: boolean; // 骑士决斗是否已使用
@@ -224,6 +225,14 @@ export interface ExileVoteState {
   pkVotes?: { [voterId: number]: number | 'skip' }; // PK投票
 }
 
+// 狼人聊天消息
+export interface WolfChatMessage {
+  playerId: number;
+  playerName: string;
+  content: string;
+  timestamp: string;
+}
+
 // 夜间操作状态
 export interface NightActionsState {
   // 恐惧阶段
@@ -246,6 +255,9 @@ export interface NightActionsState {
   wolfKill?: number;
   wolfSubmitted?: boolean;
   wolfVotes?: { [wolfId: number]: number }; // 狼人投票记录
+
+  // 狼人聊天记录（刀人阶段临时聊天室）
+  wolfChat?: WolfChatMessage[];
 
   // 狼美人阶段
   wolfBeautyTarget?: number;
@@ -325,6 +337,9 @@ export interface Game {
   // 待处理的死亡触发效果（猎人开枪、黑狼王爆炸等）
   pendingDeathTriggers?: PendingDeathTrigger[];
 
+  // 自爆标记：狼人自爆后跳过白天直接进入夜晚
+  skipToNight?: boolean;
+
   createdAt: string;
   startedAt?: string;
   finishedAt?: string;
@@ -372,7 +387,9 @@ export type ClientMessage =
   | { type: 'EXILE_VOTE', targetId: number | 'skip' } // 放逐投票
   | { type: 'EXILE_PK_VOTE', targetId: number | 'skip' } // 平票PK投票
   // 死亡触发相关
-  | { type: 'GOD_RESOLVE_DEATH_TRIGGER', triggerId: string, targetId: number | 'skip' }; // 上帝处理猎人开枪/黑狼王爆炸
+  | { type: 'GOD_RESOLVE_DEATH_TRIGGER', triggerId: string, targetId: number | 'skip' } // 上帝处理猎人开枪/黑狼王爆炸
+  // 狼人聊天
+  | { type: 'WOLF_CHAT_SEND', content: string };
 
 export interface PlayerAction {
   phase: GamePhase;
@@ -415,6 +432,8 @@ export type ServerMessage =
   | { type: 'SHERIFF_BADGE_UPDATE', sheriffId: number, state: SheriffBadgeState, reason?: string }
   // 放逐投票更新
   | { type: 'EXILE_VOTE_UPDATE', state: ExileVoteState }
+  // 狼人聊天消息
+  | { type: 'WOLF_CHAT_MESSAGE', message: WolfChatMessage }
   // 错误消息
   | { type: 'ERROR', message: string, code?: string };
 
@@ -486,6 +505,7 @@ export interface RoundReplayData {
 
   night: {
     actions: NightActionReplayRecord[];
+    wolfChat?: WolfChatMessage[];
     settlement: string;
     deaths: DeathReplayInfo[];
   };

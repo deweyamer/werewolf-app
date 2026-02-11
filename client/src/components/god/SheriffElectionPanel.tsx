@@ -56,21 +56,66 @@ export default function SheriffElectionPanel({ currentGame }: SheriffElectionPan
             </div>
           )}
 
-          {/* 投票阶段显示投票情况 */}
-          {currentGame.sheriffElection.phase === 'voting' && Object.keys(currentGame.sheriffElection.votes).length > 0 && (
-            <div className="mb-4">
-              <div className="text-gray-300 text-sm mb-2">
-                已投票 ({Object.keys(currentGame.sheriffElection.votes).length}人):
-              </div>
-              <div className="space-y-1 text-sm">
-                {Object.entries(currentGame.sheriffElection.votes).map(([voterId, candidateId]) => (
-                  <div key={voterId} className="text-gray-300">
-                    {voterId}号 → {candidateId === 'skip' ? '弃票' : `${candidateId}号`}
+          {/* 投票阶段显示投票详情 */}
+          {currentGame.sheriffElection.phase === 'voting' && (() => {
+            const election = currentGame.sheriffElection!;
+            const eligibleVoters = currentGame.players.filter(
+              p => p.alive && !election.candidates.includes(p.playerId)
+            );
+            const votedCount = Object.keys(election.votes).length;
+            const totalVoters = eligibleVoters.length;
+
+            return (
+              <div className="mb-4 space-y-3">
+                {/* 投票进度 */}
+                <div className="text-gray-300 text-sm">
+                  投票进度: {votedCount} / {totalVoters}
+                  {votedCount === totalVoters && (
+                    <span className="ml-2 text-green-400 font-bold">投票完成，正在自动计票...</span>
+                  )}
+                </div>
+
+                {/* 各候选人得票统计 */}
+                {votedCount > 0 && (
+                  <div className="space-y-1.5">
+                    {election.candidates.map(candidateId => {
+                      const voteCount = Object.values(election.votes).filter(v => v === candidateId).length;
+                      const candidate = currentGame.players.find(p => p.playerId === candidateId);
+                      return (
+                        <div key={candidateId} className="flex items-center justify-between text-sm">
+                          <span className="text-white">{candidateId}号 {candidate?.username}</span>
+                          <span className="text-yellow-400 font-bold">{voteCount} 票</span>
+                        </div>
+                      );
+                    })}
+                    {(() => {
+                      const skipCount = Object.values(election.votes).filter(v => v === 'skip').length;
+                      return skipCount > 0 ? (
+                        <div className="flex items-center justify-between text-sm">
+                          <span className="text-gray-500">弃票</span>
+                          <span className="text-gray-400 font-bold">{skipCount} 票</span>
+                        </div>
+                      ) : null;
+                    })()}
                   </div>
-                ))}
+                )}
+
+                {/* 投票明细 */}
+                {votedCount > 0 && (
+                  <div className="pt-2 border-t border-white/10">
+                    <div className="text-gray-400 text-xs mb-1">投票明细:</div>
+                    <div className="space-y-0.5 text-xs">
+                      {Object.entries(election.votes).map(([voterId, candidateId]) => (
+                        <div key={voterId} className="text-gray-400">
+                          {voterId}号 → {candidateId === 'skip' ? '弃票' : `${candidateId}号`}
+                        </div>
+                      ))}
+                    </div>
+                  </div>
+                )}
               </div>
-            </div>
-          )}
+            );
+          })()}
 
           {/* 阶段控制按钮 */}
           <div className="flex gap-3">
@@ -93,9 +138,9 @@ export default function SheriffElectionPanel({ currentGame }: SheriffElectionPan
             {currentGame.sheriffElection.phase === 'voting' && (
               <button
                 onClick={() => wsService.send({ type: 'GOD_SHERIFF_TALLY_VOTES' })}
-                className="flex-1 py-3 bg-green-600 hover:bg-green-500 text-white font-bold rounded-lg transition"
+                className="flex-1 py-3 bg-gray-600 hover:bg-gray-500 text-white font-bold rounded-lg transition text-sm"
               >
-                结束投票，统计结果
+                手动统计结果（全部投完后自动统计）
               </button>
             )}
           </div>

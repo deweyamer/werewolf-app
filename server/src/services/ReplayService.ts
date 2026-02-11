@@ -7,6 +7,7 @@ import {
   DeathReplayInfo,
   SheriffElectionReplayRecord,
   ExileVoteReplayRecord,
+  WolfChatMessage,
 } from '../../../shared/src/types.js';
 import { ROLES } from '../../../shared/src/constants.js';
 
@@ -156,6 +157,9 @@ export class ReplayService {
       });
     }
 
+    // 狼人聊天记录
+    const wolfChat: WolfChatMessage[] = na.wolfChat || [];
+
     // 构建夜间死亡列表
     const nightDeaths: DeathReplayInfo[] = [];
     // 从entry.deaths中筛选夜间死亡（这里简化处理）
@@ -193,6 +197,7 @@ export class ReplayService {
       round: entry.round,
       night: {
         actions: nightActions,
+        wolfChat: wolfChat.length > 0 ? wolfChat : undefined,
         settlement: entry.settlementMessage || '结算完成',
         deaths: nightDeaths,
       },

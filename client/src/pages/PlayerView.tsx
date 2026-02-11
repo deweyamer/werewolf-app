@@ -2,7 +2,7 @@ import { useState, useEffect, useCallback } from 'react';
 import { useAuthStore } from '../stores/authStore';
 import { useGameStore } from '../stores/gameStore';
 import { wsService } from '../services/websocket';
-import { ServerMessage, GamePlayer } from '../../../shared/src/types';
+import { ServerMessage, GamePlayer, WolfChatMessage } from '../../../shared/src/types';
 import { useToast } from '../components/Toast';
 import { getRoleName, getPhaseLabel } from '../utils/phaseLabels';
 import { useGameSocket } from '../hooks/useGameSocket';
@@ -27,6 +27,12 @@ export default function PlayerView() {
   const [sheriffVote, setSheriffVote] = useState<number | 'skip'>(0);
   const [exileVote, setExileVote] = useState<number | 'skip'>(0);
 
+  // 狼人聊天状态
+  const [wolfChatMessages, setWolfChatMessages] = useState<WolfChatMessage[]>([]);
+
+  // 玩家列表折叠状态
+  const [playerListExpanded, setPlayerListExpanded] = useState(false);
+
   // 页面特定消息处理（通用消息由 useGameSocket 统一处理）
   const handlePageMessage = useCallback((message: ServerMessage) => {
     switch (message.type) {
@@ -35,7 +41,14 @@ export default function PlayerView() {
         break;
       case 'PHASE_CHANGED':
         setIsSubmitting(false);
+        // 离开狼人阶段时清空聊天消息
+        if (message.phase !== 'wolf') {
+          setWolfChatMessages([]);
+        }
         toast(`${getPhaseLabel(message.phase)}`, 'info');
+        break;
+      case 'WOLF_CHAT_MESSAGE':
+        setWolfChatMessages(prev => [...prev, message.message]);
         break;
       case 'GAME_FINISHED':
         toast(`游戏结束！${message.winner === 'wolf' ? '狼人' : '好人'}获胜！`, 'info', 8000);
@@ -302,6 +315,44 @@ export default function PlayerView() {
                   {!myPlayer.alive && (
                     <div className="text-red-400 mt-2">你已出局</div>
                   )}
+                  {/* 技能状态 */}
+                  {myPlayer.role && currentGame.status === 'running' && myPlayer.alive && (
+                    <div className="mt-3 flex flex-wrap gap-2 text-xs">
+                      {myPlayer.role === 'witch' && (
+                        <>
+                          <span className={myPlayer.abilities.antidote ? 'text-green-400' : 'text-gray-500'}>
+                            解药 {myPlayer.abilities.antidote ? '可用' : '已用'}
+                          </span>
+                          <span className={myPlayer.abilities.poison ? 'text-red-400' : 'text-gray-500'}>
+                            毒药 {myPlayer.abilities.poison ? '可用' : '已用'}
+                          </span>
+                        </>
+                      )}
+                      {myPlayer.role === 'guard' && myPlayer.abilities.guardHistory && myPlayer.abilities.guardHistory.length > 0 && (
+                        <span className="text-blue-300">
+                          上晚守护: {(() => {
+                            const last = myPlayer.abilities.guardHistory[myPlayer.abilities.guardHistory.length - 1];
+                            return last === 0 ? '空守' : `${last}号`;
+                          })()}
+                        </span>
+                      )}
+                      {myPlayer.role === 'dreamer' && myPlayer.abilities.lastDreamTarget && (
+                        <span className="text-blue-300">
+                          上晚梦游: {myPlayer.abilities.lastDreamTarget}号
+                        </span>
+                      )}
+                    </div>
+                  )}
+                </div>
+              )}
+
+              {/* 当前阶段信息 */}
+              {currentGame.status === 'running' && (
+                <div className="mb-6 p-4 bg-white/5 border border-white/10 rounded-lg">
+                  <div className="text-gray-400 text-sm mb-1">当前阶段</div>
+                  <div className="text-white font-bold text-lg">
+                    第 {currentGame.currentRound} 回合 - {getPhaseLabel(currentGame.currentPhase)}
+                  </div>
                 </div>
               )}
 
@@ -360,34 +411,68 @@ export default function PlayerView() {
                 </div>
               )}
 
+              {/* 玩家列表 - 游戏进行中可折叠 */}
               <div>
-                <h3 className="text-xl font-bold text-white mb-4">
-                  玩家列表 ({currentGame.players.length}/12)
-                </h3>
-                <div className="grid grid-cols-3 gap-4">
-                  {currentGame.players.map((player) => (
-                    <div
-                      key={player.playerId}
-                      className={`p-4 rounded-lg border-2 ${
-                        player.userId === user?.userId
-                          ? 'bg-blue-600/20 border-blue-500'
-                          : player.alive
-                            ? 'bg-green-600/20 border-green-500'
-                            : 'bg-red-600/20 border-red-500'
-                      }`}
-                    >
-                      <div className="text-white font-bold">
-                        {player.playerId}号 {player.isSheriff && '🎖️'}
+                <button
+                  onClick={() => setPlayerListExpanded(!playerListExpanded)}
+                  className="flex items-center justify-between w-full text-left mb-2"
+                >
+                  <h3 className="text-xl font-bold text-white">
+                    玩家列表
+                    <span className="text-gray-400 text-sm font-normal ml-2">
+                      存活 {currentGame.players.filter(p => p.alive).length}/{currentGame.players.length}
+                    </span>
+                  </h3>
+                  <span className="text-gray-400 text-sm">
+                    {playerListExpanded ? '收起 ▲' : '展开 ▼'}
+                  </span>
+                </button>
+
+                {/* 折叠时显示简要存活/死亡一览 */}
+                {!playerListExpanded && currentGame.status === 'running' && (
+                  <div className="flex flex-wrap gap-1.5">
+                    {currentGame.players.map((player) => (
+                      <span
+                        key={player.playerId}
+                        className={`px-2 py-0.5 rounded text-xs font-bold ${
+                          player.userId === user?.userId
+                            ? 'bg-blue-600/40 text-blue-200 border border-blue-500/50'
+                            : player.alive
+                              ? 'bg-green-600/20 text-green-300'
+                              : 'bg-red-600/20 text-red-400 line-through'
+                        }`}
+                      >
+                        {player.playerId}号{player.isSheriff ? '🎖️' : ''}
+                      </span>
+                    ))}
+                  </div>
+                )}
+
+                {/* 展开时显示完整列表 */}
+                {(playerListExpanded || currentGame.status !== 'running') && (
+                  <div className="grid grid-cols-3 gap-4 mt-2">
+                    {currentGame.players.map((player) => (
+                      <div
+                        key={player.playerId}
+                        className={`p-4 rounded-lg border-2 ${
+                          player.userId === user?.userId
+                            ? 'bg-blue-600/20 border-blue-500'
+                            : player.alive
+                              ? 'bg-green-600/20 border-green-500'
+                              : 'bg-red-600/20 border-red-500'
+                        }`}
+                      >
+                        <div className="text-white font-bold">
+                          {player.playerId}号 {player.isSheriff && '🎖️'}
+                        </div>
+                        <div className="text-gray-300 text-sm">{player.username}</div>
+                        {!player.alive && (
+                          <div className="text-red-400 text-sm mt-1">已出局</div>
+                        )}
                       </div>
-                      <div className="text-gray-300 text-sm">{player.username}</div>
-                      {!player.alive && (
-                        // ⚠️ 安全警告: 禁止显示 outReason (player.outReason)
-                        // 显示出局原因会泄露关键游戏信息 (如"被狼刀"泄露狼人行为)
-                        <div className="text-red-400 text-sm mt-1">已出局</div>
-                      )}
-                    </div>
-                  ))}
-                </div>
+                    ))}
+                  </div>
+                )}
               </div>
             </div>
 
@@ -406,6 +491,7 @@ export default function PlayerView() {
                 onSubmitAction={handleSubmitAction}
                 onWitchSubmit={handleWitchSubmit}
                 isSubmitting={isSubmitting}
+                wolfChatMessages={wolfChatMessages}
               />
             )}
 
@@ -490,22 +576,6 @@ export default function PlayerView() {
                       </div>
                     )}
 
-                    {currentGame.sheriffElection.candidates.length > 0 && (
-                      <div className="mt-6">
-                        <h4 className="text-white font-bold mb-3">已上警玩家:</h4>
-                        <div className="flex flex-wrap gap-2">
-                          {currentGame.sheriffElection.candidates.map(candidateId => {
-                            const candidate = currentGame.players.find(p => p.playerId === candidateId);
-                            return (
-                              <div key={candidateId} className="px-4 py-2 bg-yellow-600/30 border border-yellow-500 rounded-lg">
-                                <span className="text-white font-bold">{candidateId}号</span>
-                                <span className="text-gray-300 ml-2">{candidate?.username}</span>
-                              </div>
-                            );
-                          })}
-                        </div>
-                      </div>
-                    )}
                   </div>
                 )}
 
@@ -580,6 +650,15 @@ export default function PlayerView() {
                         >
                           {isSubmitting ? '提交中...' : '确认投票'}
                         </button>
+                      </div>
+                    )}
+
+                    {/* 投票进度 - 仅显示已投票人数，不显示具体票数（具体票数只有上帝可见） */}
+                    {Object.keys(currentGame.sheriffElection.votes).length > 0 && (
+                      <div className="mt-6 p-4 bg-white/5 border border-white/10 rounded-lg">
+                        <p className="text-gray-400 text-sm">
+                          投票进行中: {Object.keys(currentGame.sheriffElection.votes).length} / {currentGame.players.filter(p => p.alive && !currentGame.sheriffElection!.candidates.includes(p.playerId)).length} 人已投票
+                        </p>
                       </div>
                     )}
                   </div>

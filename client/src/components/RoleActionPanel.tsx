@@ -1,5 +1,5 @@
-import { useState } from 'react';
-import { GamePlayer, Game, NightSubPhase } from '../../../shared/src/types';
+import { useState, useRef, useEffect } from 'react';
+import { GamePlayer, Game, NightSubPhase, WolfChatMessage } from '../../../shared/src/types';
 import { wsService } from '../services/websocket';
 import { getRoleName, getPhaseLabel } from '../utils/phaseLabels';
 
@@ -23,6 +23,8 @@ interface RoleActionPanelProps {
   onSubmitAction: () => void;
   onWitchSubmit: (action?: 'save' | 'poison' | 'none', target?: number) => void;
   isSubmitting?: boolean;
+  // 狼人聊天
+  wolfChatMessages?: WolfChatMessage[];
 }
 
 const PANEL_CLASS = "bg-white/10 backdrop-blur-md rounded-2xl p-8 shadow-2xl border border-white/20";
@@ -238,12 +240,91 @@ function WitchPanel({
   );
 }
 
+/** 狼人聊天面板 */
+function WolfChatPanel({
+  messages,
+  myPlayerId,
+}: {
+  messages: WolfChatMessage[];
+  myPlayerId: number;
+}) {
+  const [inputText, setInputText] = useState('');
+  const messagesEndRef = useRef<HTMLDivElement>(null);
+
+  useEffect(() => {
+    messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' });
+  }, [messages]);
+
+  const handleSend = () => {
+    const text = inputText.trim();
+    if (!text) return;
+    wsService.send({ type: 'WOLF_CHAT_SEND', content: text });
+    setInputText('');
+  };
+
+  const handleKeyDown = (e: React.KeyboardEvent) => {
+    if (e.key === 'Enter' && !e.shiftKey) {
+      e.preventDefault();
+      handleSend();
+    }
+  };
+
+  return (
+    <div className="mb-6 p-4 bg-gray-800/50 border border-red-500/30 rounded-lg">
+      <h4 className="text-white font-bold mb-3">💬 狼人密聊</h4>
+
+      {/* 消息列表 */}
+      <div className="h-40 overflow-y-auto mb-3 space-y-2 bg-black/30 rounded-lg p-3">
+        {messages.length === 0 && (
+          <p className="text-gray-500 text-sm text-center">暂无消息，发送一条吧...</p>
+        )}
+        {messages.map((msg, idx) => {
+          const isMine = msg.playerId === myPlayerId;
+          return (
+            <div key={idx} className={`flex ${isMine ? 'justify-end' : 'justify-start'}`}>
+              <div className={`max-w-[80%] rounded-lg px-3 py-1.5 ${
+                isMine ? 'bg-red-600/40 text-white' : 'bg-gray-700/60 text-gray-200'
+              }`}>
+                {!isMine && (
+                  <div className="text-xs text-red-300 font-bold mb-0.5">{msg.playerId}号 {msg.playerName}</div>
+                )}
+                <div className="text-sm break-words">{msg.content}</div>
+              </div>
+            </div>
+          );
+        })}
+        <div ref={messagesEndRef} />
+      </div>
+
+      {/* 输入区域 */}
+      <div className="flex gap-2">
+        <input
+          type="text"
+          value={inputText}
+          onChange={(e) => setInputText(e.target.value)}
+          onKeyDown={handleKeyDown}
+          placeholder="输入消息..."
+          className="flex-1 px-3 py-2 bg-gray-700 border border-gray-600 rounded-lg text-white text-sm placeholder-gray-400 focus:border-red-500 focus:outline-none"
+        />
+        <button
+          onClick={handleSend}
+          disabled={!inputText.trim()}
+          className="px-4 py-2 bg-red-600 hover:bg-red-700 disabled:bg-gray-600 disabled:cursor-not-allowed text-white font-bold rounded-lg transition text-sm"
+        >
+          发送
+        </button>
+      </div>
+    </div>
+  );
+}
+
 export default function RoleActionPanel(props: RoleActionPanelProps) {
   const {
     myPlayer, currentGame, selectedTarget, setSelectedTarget,
     witchAction, setWitchAction, showPoisonModal, setShowPoisonModal,
     poisonTarget, setPoisonTarget, onSubmitAction, onWitchSubmit,
     isSubmitting = false,
+    wolfChatMessages = [],
   } = props;
 
   const phase = currentGame.currentPhase;
@@ -326,18 +407,39 @@ export default function RoleActionPanel(props: RoleActionPanelProps) {
 
   // 守卫 - 守护阶段
   if (role === 'guard' && phase === 'guard') {
+    const guardHistory: number[] = myPlayer.abilities.guardHistory || [];
+    const lastGuard = myPlayer.abilities.lastGuardTarget;
+    // lastGuardTarget > 0 表示上轮守护了某人，需要排除；0 或 undefined 表示空手，不排除
+    const excludeTarget = lastGuard && lastGuard > 0 ? lastGuard : null;
+
     return (
       <div className={PANEL_CLASS}>
         <h3 className="text-xl font-bold text-white mb-4">🛡️ 守护阶段 - 守卫</h3>
         <p className="text-gray-300 mb-6">选择一名玩家进行守护，使其今晚免受狼刀。不能连续两晚守护同一人。</p>
-        {myPlayer.abilities.lastGuardTarget && (
+        {guardHistory.length > 0 && (
           <div className="mb-4 p-3 bg-blue-600/20 border border-blue-500 rounded-lg">
-            <p className="text-blue-300 text-sm">🛡️ 上一晚守护了 {myPlayer.abilities.lastGuardTarget}号（本晚不可再选）</p>
+            <p className="text-blue-300 text-sm mb-1">🛡️ 守护记录:</p>
+            <div className="flex flex-wrap gap-1.5">
+              {guardHistory.map((target, idx) => (
+                <span key={idx} className={`px-2 py-0.5 rounded text-xs font-bold ${
+                  target === 0
+                    ? 'bg-gray-600/40 text-gray-400'
+                    : idx === guardHistory.length - 1
+                      ? 'bg-blue-600/40 text-blue-200 border border-blue-500/50'
+                      : 'bg-blue-600/20 text-blue-300'
+                }`}>
+                  R{idx + 1}: {target === 0 ? '空手' : `${target}号`}
+                </span>
+              ))}
+            </div>
+            {excludeTarget && (
+              <p className="text-yellow-300 text-xs mt-2">上一晚守护了 {excludeTarget}号（本晚不可再选）</p>
+            )}
           </div>
         )}
         <div className="space-y-4">
           <TargetSelector
-            players={currentGame.players}
+            players={currentGame.players.filter(p => !excludeTarget || p.playerId !== excludeTarget)}
             myPlayerId={myPlayer.playerId}
             value={selectedTarget}
             onChange={setSelectedTarget}
@@ -355,7 +457,7 @@ export default function RoleActionPanel(props: RoleActionPanelProps) {
               setSelectedTarget(0);
               submitAction(currentGame, myPlayer, 'skip', 0);
             }}
-            skipLabel="放弃守护"
+            skipLabel="空手（放弃守护）"
           />
         </div>
       </div>
@@ -516,6 +618,9 @@ export default function RoleActionPanel(props: RoleActionPanelProps) {
           </div>
         </div>
 
+        {/* 狼人密聊 */}
+        <WolfChatPanel messages={wolfChatMessages} myPlayerId={myPlayer.playerId} />
+
         <div className="space-y-4">
           <TargetSelector
             players={currentGame.players}
@@ -567,25 +672,13 @@ export default function RoleActionPanel(props: RoleActionPanelProps) {
     );
   }
 
-  // 通用 fallback — 用于所有未专门处理的角色/阶段组合
+  // 非当前角色行动阶段 — 显示等待提示
   return (
-    <div className={PANEL_CLASS}>
-      <h3 className="text-xl font-bold text-white mb-4">当前阶段: {getPhaseLabel(phase)}</h3>
-      <div className="space-y-4">
-        <TargetSelector
-          players={currentGame.players}
-          myPlayerId={myPlayer.playerId}
-          value={selectedTarget}
-          onChange={setSelectedTarget}
-          label="选择目标"
-        />
-        <ActionButtons
-          onSubmit={onSubmitAction}
-          submitLabel="提交操作"
-          submitColor="purple"
-          isLoading={isSubmitting}
-        />
-      </div>
+    <div className={`${PANEL_CLASS} text-center`}>
+      <h3 className="text-xl font-bold text-white mb-4">
+        第 {currentGame.currentRound} 回合 - {getPhaseLabel(phase)}
+      </h3>
+      <p className="text-gray-300">请等待当前阶段结束...</p>
     </div>
   );
 }

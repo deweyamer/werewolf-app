@@ -304,4 +304,96 @@ describe('GameFlowEngine', () => {
       expect(player1?.alive).toBe(false);
     });
   });
+
+  // ─────────────────────────────────────────────
+  // 守卫挡刀测试
+  // ─────────────────────────────────────────────
+  describe('守卫守护挡狼刀', () => {
+    // 包含 guard 阶段的 scriptPhases
+    const phasesWithGuard = [
+      { id: 'lobby', order: 0, isNightPhase: false, description: '等待开始' },
+      { id: 'guard', order: 1, isNightPhase: true, description: '守卫行动' },
+      { id: 'wolf', order: 2, isNightPhase: true, description: '狼人行动' },
+      { id: 'witch', order: 3, isNightPhase: true, description: '女巫行动' },
+      { id: 'seer', order: 4, isNightPhase: true, description: '预言家查验' },
+      { id: 'settle', order: 5, isNightPhase: false, description: '夜间结算' },
+      { id: 'sheriffElection', order: 6, isNightPhase: false, description: '警长竞选' },
+      { id: 'discussion', order: 7, isNightPhase: false, description: '讨论发言' },
+      { id: 'vote', order: 8, isNightPhase: false, description: '投票阶段' },
+      { id: 'daySettle', order: 9, isNightPhase: false, description: '白天结算' },
+      { id: 'finished', order: 10, isNightPhase: false, description: '游戏结束' },
+    ];
+
+    it('守卫守护10号 + 狼刀10号 → 10号应该存活', async () => {
+      game.currentPhase = 'guard';
+      game.currentPhaseType = 'night';
+
+      // 守卫(8号)守护10号
+      const guardResult = await engine.submitAction(game, {
+        phase: 'guard',
+        playerId: 8,
+        actionType: 'action',
+        target: 10,
+      });
+      expect(guardResult.success).toBe(true);
+
+      // 推进到狼人阶段
+      await engine.advancePhase(game, phasesWithGuard);
+      expect(game.currentPhase).toBe('wolf');
+
+      // 狼人(1号)刀10号
+      const wolfResult = await engine.submitAction(game, {
+        phase: 'wolf',
+        playerId: 1,
+        actionType: 'action',
+        target: 10,
+      });
+      expect(wolfResult.success).toBe(true);
+
+      // 推进到女巫、预言家阶段
+      await engine.advancePhase(game, phasesWithGuard); // wolf → witch
+      await engine.advancePhase(game, phasesWithGuard); // witch → seer
+
+      // 推进到 settle，触发夜间结算
+      await engine.advancePhase(game, phasesWithGuard); // seer → settle
+
+      // 10号应该存活（被守卫守护，狼刀被挡）
+      const player10 = game.players.find(p => p.playerId === 10);
+      expect(player10?.alive).toBe(true);
+    });
+
+    it('守卫不守护时 + 狼刀10号 → 10号应该死亡', async () => {
+      game.currentPhase = 'guard';
+      game.currentPhaseType = 'night';
+
+      // 守卫(8号)放弃守护
+      const guardResult = await engine.submitAction(game, {
+        phase: 'guard',
+        playerId: 8,
+        actionType: 'skip',
+        target: 0,
+      });
+      expect(guardResult.success).toBe(true);
+
+      // 推进到狼人阶段
+      await engine.advancePhase(game, phasesWithGuard);
+
+      // 狼人(1号)刀10号
+      await engine.submitAction(game, {
+        phase: 'wolf',
+        playerId: 1,
+        actionType: 'action',
+        target: 10,
+      });
+
+      // 推进到结算
+      await engine.advancePhase(game, phasesWithGuard); // wolf → witch
+      await engine.advancePhase(game, phasesWithGuard); // witch → seer
+      await engine.advancePhase(game, phasesWithGuard); // seer → settle
+
+      // 10号应该死亡
+      const player10 = game.players.find(p => p.playerId === 10);
+      expect(player10?.alive).toBe(false);
+    });
+  });
 });

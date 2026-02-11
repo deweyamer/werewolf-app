@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { useState, useEffect, useRef } from 'react';
 import { useAuthStore } from '../stores/authStore';
 import { wsService } from '../services/websocket';
 import { config } from '../config';
@@ -12,6 +12,43 @@ export default function LoginPage() {
   const [loading, setLoading] = useState(false);
   const [isRegisterMode, setIsRegisterMode] = useState(false);
   const { setAuth } = useAuthStore();
+  const autoLoginAttempted = useRef(false);
+
+  // URL 参数自动登录：?user=test1&pwd=test
+  useEffect(() => {
+    if (autoLoginAttempted.current) return;
+    autoLoginAttempted.current = true;
+
+    const params = new URLSearchParams(window.location.search);
+    const autoUser = params.get('user');
+    const autoPwd = params.get('pwd');
+    if (!autoUser || !autoPwd) return;
+
+    // 清除 URL 参数（避免刷新重复登录）
+    window.history.replaceState({}, '', window.location.pathname);
+
+    (async () => {
+      setLoading(true);
+      try {
+        const response = await fetch(`${config.apiUrl}/auth/login`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ username: autoUser, password: autoPwd }),
+        });
+        const data = await response.json();
+        if (data.success) {
+          setAuth(data.data.user, data.data.token);
+          wsService.connect(data.data.token);
+        } else {
+          setError(`自动登录失败: ${data.error || '未知错误'}`);
+        }
+      } catch {
+        setError('自动登录失败: 网络错误');
+      } finally {
+        setLoading(false);
+      }
+    })();
+  }, [setAuth]);
 
   const handleRegister = async (e: React.FormEvent) => {
     e.preventDefault();

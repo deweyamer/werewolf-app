@@ -50,7 +50,7 @@ RUN npm install && npm run build
 FROM node:18-alpine
 
 LABEL maintainer="werewolf-game"
-LABEL description="狼人杀摄梦人12人版"
+LABEL description="狼人杀"
 
 WORKDIR /app
 

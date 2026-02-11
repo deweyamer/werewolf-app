@@ -55,9 +55,12 @@ export default function RoleStatusPanel({ game }: { game: Game }) {
       statusLine = `${p.playerId}号 · 解药:${hasAntidote ? '有' : '已用'} 毒药:${hasPoison ? '有' : '已用'}`;
       witchActions.forEach(a => details.push(`R${a.round}: ${a.result}`));
     } else if (role === 'guard') {
-      const lastTarget = p.abilities.lastGuardTarget;
+      const guardHistory: number[] = p.abilities.guardHistory || [];
       const currTarget = game.nightActions.guardTarget;
-      statusLine = `${p.playerId}号 · 昨晚守${lastTarget || '-'}号${currTarget ? ` · 今晚守${currTarget}号` : ''}`;
+      const historyStr = guardHistory.length > 0
+        ? guardHistory.map((t, i) => `R${i + 1}:${t === 0 ? '空手' : t + '号'}`).join(' ')
+        : '无';
+      statusLine = `${p.playerId}号 · 历史:[${historyStr}]${currTarget ? ` · 今晚守${currTarget}号` : ''}`;
     } else if (role === 'hunter') {
       const isPoisoned = p.outReason === 'poison';
       statusLine = `${p.playerId}号 · ${!p.alive ? (isPoisoned ? '被毒·不可开枪' : '已出局') : '可开枪'}`;

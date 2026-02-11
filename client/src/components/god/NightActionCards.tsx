@@ -26,7 +26,14 @@ export default function NightActionCards({ game }: { game: Game }) {
     cards.push({ role: 'gargoyle', label: '石像鬼', icon: '🗿', submitted: na.gargoyleSubmitted, detail: na.gargoyleTarget ? `查验 ${na.gargoyleTarget}号` : '等待操作...', color: 'purple' });
   }
   if (aliveRoles.has('guard')) {
-    cards.push({ role: 'guard', label: '守卫', icon: '🛡️', submitted: na.guardSubmitted, detail: na.guardTarget ? `守护 ${na.guardTarget}号` : '等待操作...', color: 'blue' });
+    const guardPlayer = game.players.find(p => p.role === 'guard' && p.alive);
+    const guardHistory: number[] = guardPlayer?.abilities.guardHistory || [];
+    const historyStr = guardHistory.length > 0
+      ? guardHistory.map((t, i) => `R${i + 1}:${t === 0 ? '空手' : t + '号'}`).join(' ')
+      : '';
+    const currentDetail = na.guardSubmitted ? (na.guardTarget ? `守护 ${na.guardTarget}号` : '空手') : '等待操作...';
+    const detail = historyStr ? `${currentDetail} | 历史: ${historyStr}` : currentDetail;
+    cards.push({ role: 'guard', label: '守卫', icon: '🛡️', submitted: na.guardSubmitted, detail, color: 'blue' });
   }
   cards.push({ role: 'wolf', label: '狼人', icon: '🐺', submitted: na.wolfSubmitted, detail: na.wolfKill ? `击杀 ${na.wolfKill}号` : '商议中...', color: 'red' });
   if (aliveRoles.has('wolf_beauty')) {

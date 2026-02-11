@@ -15,9 +15,9 @@ export class VotingSystem {
       votes: {},
     };
 
-    // 重置所有玩家的警长竞选状态
+    // 重置所有玩家的警长竞选状态（undefined 表示尚未做出选择）
     game.players.forEach(p => {
-      p.sheriffCandidate = false;
+      p.sheriffCandidate = undefined;
       p.sheriffWithdrawn = false;
     });
   }

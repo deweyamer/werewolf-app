@@ -171,6 +171,10 @@ export class SocketManager {
         await this.handleGodResolveDeathTrigger(socket, message.triggerId, message.targetId, send);
         break;
 
+      case 'WOLF_CHAT_SEND':
+        await this.handleWolfChat(socket, message.content, send);
+        break;
+
       default:
         send({ type: 'ERROR', message: '未知的消息类型' });
     }
@@ -577,6 +581,71 @@ export class SocketManager {
     }
   }
 
+  // ================= 狼人聊天处理 =================
+
+  private async handleWolfChat(
+    socket: Socket,
+    content: string,
+    send: (msg: ServerMessage) => void
+  ) {
+    const user = this.socketUsers.get(socket.id);
+    if (!user) {
+      send({ type: 'ERROR', message: '需要先认证' });
+      return;
+    }
+
+    const rooms = Array.from(socket.rooms);
+    const gameRoom = rooms.find(r => r !== socket.id);
+    if (!gameRoom) {
+      send({ type: 'ERROR', message: '未加入房间' });
+      return;
+    }
+
+    const game = this.gameService.getGame(gameRoom);
+    if (!game) {
+      send({ type: 'ERROR', message: '游戏不存在' });
+      return;
+    }
+
+    // 验证：当前必须是狼人刀人阶段
+    if (game.currentPhase !== 'wolf') {
+      send({ type: 'ERROR', message: '当前不是狼人刀人阶段' });
+      return;
+    }
+
+    // 验证：发送者必须是存活的狼人阵营
+    const player = game.players.find(p => p.userId === user.userId);
+    if (!player || !player.alive || player.camp !== 'wolf') {
+      send({ type: 'ERROR', message: '只有存活的狼人才能发送消息' });
+      return;
+    }
+
+    // 构建聊天消息
+    const chatMessage = {
+      playerId: player.playerId,
+      playerName: player.username,
+      content,
+      timestamp: new Date().toISOString(),
+    };
+
+    // 存储到 nightActions.wolfChat
+    if (!game.nightActions.wolfChat) {
+      game.nightActions.wolfChat = [];
+    }
+    game.nightActions.wolfChat.push(chatMessage);
+
+    // 广播给同房间所有存活狼人
+    for (const wolfPlayer of game.players.filter(p => p.camp === 'wolf' && p.alive)) {
+      const wolfSocket = this.userSockets.get(wolfPlayer.userId);
+      if (wolfSocket) {
+        wolfSocket.emit('message', {
+          type: 'WOLF_CHAT_MESSAGE',
+          message: chatMessage,
+        } as ServerMessage);
+      }
+    }
+  }
+
   // ================= 警长竞选处理 =================
 
   private async handleSheriffSignup(
@@ -708,10 +777,53 @@ export class SocketManager {
     if (success) {
       const updatedGame = this.gameService.getGame(game.id);
       if (updatedGame && updatedGame.sheriffElection) {
-        this.io.to(game.id).emit('message', {
-          type: 'SHERIFF_ELECTION_UPDATE',
-          state: updatedGame.sheriffElection
-        } as ServerMessage);
+        // 检查是否所有有投票权的人都已投票（活着的非候选人）
+        const eligibleVoters = updatedGame.players.filter(
+          p => p.alive && !updatedGame.sheriffElection!.candidates.includes(p.playerId)
+        );
+        const allVoted = eligibleVoters.every(
+          p => updatedGame.sheriffElection!.votes[p.playerId] !== undefined
+        );
+
+        if (allVoted) {
+          // 所有人投完，自动计票
+          const result = await this.gameService.tallySheriffVotes(updatedGame.id);
+          const finalGame = this.gameService.getGame(updatedGame.id);
+
+          if (finalGame) {
+            this.io.to(game.id).emit('message', {
+              type: 'GAME_STATE_UPDATE',
+              game: finalGame
+            } as ServerMessage);
+
+            if (finalGame.sheriffElection) {
+              this.io.to(game.id).emit('message', {
+                type: 'SHERIFF_ELECTION_UPDATE',
+                state: finalGame.sheriffElection
+              } as ServerMessage);
+            }
+
+            if (result.winner) {
+              this.io.to(game.id).emit('message', {
+                type: 'SHERIFF_BADGE_UPDATE',
+                sheriffId: result.winner,
+                state: 'normal',
+                reason: `${result.winner}号当选警长`,
+              } as ServerMessage);
+            }
+          }
+        } else {
+          // 还有人没投，仅广播投票进度更新
+          this.io.to(game.id).emit('message', {
+            type: 'GAME_STATE_UPDATE',
+            game: updatedGame
+          } as ServerMessage);
+
+          this.io.to(game.id).emit('message', {
+            type: 'SHERIFF_ELECTION_UPDATE',
+            state: updatedGame.sheriffElection
+          } as ServerMessage);
+        }
       }
       send({ type: 'ACTION_RESULT', success: true, message: '投票成功' });
     } else {

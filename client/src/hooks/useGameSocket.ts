@@ -1,4 +1,4 @@
-import { useEffect } from 'react';
+import { useEffect, useRef } from 'react';
 import { useGameStore } from '../stores/gameStore';
 import { wsService } from '../services/websocket';
 import { ServerMessage } from '../../../shared/src/types';
@@ -11,7 +11,9 @@ import { ServerMessage } from '../../../shared/src/types';
 export function useGameSocket(
   onPageMessage?: (message: ServerMessage) => void
 ) {
-  const { currentGame, setGame } = useGameStore();
+  const { setGame } = useGameStore();
+  const onPageMessageRef = useRef(onPageMessage);
+  onPageMessageRef.current = onPageMessage;
 
   useEffect(() => {
     const unsubscribe = wsService.onMessage((message: ServerMessage) => {
@@ -23,19 +25,21 @@ export function useGameSocket(
         case 'GAME_STATE_UPDATE':
           setGame(message.game);
           break;
-        case 'PLAYER_JOINED':
+        case 'PLAYER_JOINED': {
+          const currentGame = useGameStore.getState().currentGame;
           if (currentGame) {
             const updatedGame = { ...currentGame };
             updatedGame.players = [...updatedGame.players, message.player];
             setGame(updatedGame);
           }
           break;
+        }
       }
 
       // 页面特定消息处理
-      onPageMessage?.(message);
+      onPageMessageRef.current?.(message);
     });
 
     return unsubscribe;
-  }, [currentGame, setGame, onPageMessage]);
+  }, [setGame]);
 }

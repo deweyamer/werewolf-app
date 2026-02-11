@@ -504,6 +504,22 @@ export default function GodConsole() {
                 return <SheriffElectionPanel currentGame={currentGame} />;
               }
               if (phase === 'vote' || phase === 'voteResult') {
+                const hasBoom = currentGame.players.some(p => !p.alive && p.outReason === 'self_destruct');
+                if (hasBoom && !currentGame.exileVote) {
+                  return (
+                    <div className="space-y-3">
+                      <div className="p-4 sm:p-6 bg-red-600/20 rounded-xl border-2 border-red-500">
+                        <h4 className="text-base sm:text-lg font-bold text-red-400 mb-2">狼人已自爆</h4>
+                        <p className="text-gray-300 text-xs sm:text-sm">
+                          跳过投票阶段，点击「下一阶段」进入白天结算。
+                        </p>
+                      </div>
+                      {currentGame.pendingSheriffTransfer?.reason === 'wolf_explosion' && (
+                        <ExileVotePanel currentGame={currentGame} />
+                      )}
+                    </div>
+                  );
+                }
                 return <ExileVotePanel currentGame={currentGame} />;
               }
               if (phase === 'discussion') {
@@ -522,6 +538,14 @@ export default function GodConsole() {
                         </div>
                       )}
                     </div>
+                    {currentGame.skipToNight && (
+                      <div className="p-4 sm:p-6 bg-red-600/20 rounded-xl border-2 border-red-500 animate-pulse">
+                        <h4 className="text-base sm:text-lg font-bold text-red-400 mb-2">狼人已自爆</h4>
+                        <p className="text-gray-300 text-xs sm:text-sm">
+                          点击「下一阶段」将跳过白天剩余流程，直接进入下一回合夜晚。
+                        </p>
+                      </div>
+                    )}
                     {pending?.reason === 'wolf_explosion' && (
                       <div className="p-4 sm:p-6 bg-red-600/20 rounded-xl border border-red-500">
                         <h4 className="text-base sm:text-lg font-bold text-red-400 mb-2">狼人自爆 - 请指定警徽归属</h4>

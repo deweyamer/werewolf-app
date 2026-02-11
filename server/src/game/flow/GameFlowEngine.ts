@@ -28,6 +28,40 @@ export class GameFlowEngine {
       return { finished: false, message: '当前阶段配置错误' };
     }
 
+    // 自爆跳过投票：跳过 discussion/vote，直接跳到 vote 阶段
+    // 这样下次推进时 nextPhaseConfig 是 daySettle，触发正常的白天结算流程
+    if (game.skipToNight) {
+      game.skipToNight = false;
+
+      // 清空自爆产生的 SELF_DESTRUCT effect（死亡已在 handler 中直接处理）
+      this.skillResolver.clear();
+
+      // 记录自爆日志
+      const boomPlayer = game.players.find(p => p.outReason === 'self_destruct' && !p.alive);
+      if (boomPlayer) {
+        const log: ActionLog = {
+          id: uuidv4(),
+          timestamp: new Date().toISOString(),
+          round: game.currentRound,
+          phase: 'discussion' as GamePhase,
+          actorId: boomPlayer.userId,
+          actorPlayerId: boomPlayer.playerId,
+          action: 'boom',
+          target: boomPlayer.playerId,
+          result: `${boomPlayer.playerId}号狼人自爆`,
+          visible: 'all',
+        };
+        game.history.push(log);
+      }
+
+      const votePhase = scriptPhases.find(p => p.id === 'vote');
+      if (votePhase) {
+        game.currentPhase = 'vote';
+        game.currentPhaseType = 'day';
+        return { finished: false, phase: 'vote', prompt: '狼人自爆，跳过投票，即将进入白天结算' };
+      }
+    }
+
     // 找到下一个阶段
     const nextPhaseConfig = scriptPhases.find(p => p.order === currentPhaseConfig.order + 1);
     if (!nextPhaseConfig) {
@@ -219,6 +253,19 @@ export class GameFlowEngine {
     game.currentPhase = nextPhaseConfig.id;
     game.currentPhaseType = this.getPhaseType(nextPhaseConfig);
 
+    // 进入投票阶段时，初始化放逐投票
+    if (nextPhaseConfig.id === 'vote' && !game.exileVote) {
+      this.votingSystem.startExileVote(game);
+    }
+
+    // 进入女巫阶段时，提前设置被刀信息（仅当女巫有解药时）
+    if (nextPhaseConfig.id === 'witch') {
+      const witch = game.players.find(p => p.role === 'witch' && p.alive);
+      if (witch && witch.abilities.antidote && game.nightActions.wolfKill) {
+        game.nightActions.witchKnowsVictim = game.nightActions.wolfKill;
+      }
+    }
+
     return {
       finished: false,
       phase: nextPhaseConfig.id,
@@ -287,6 +334,11 @@ export class GameFlowEngine {
     // 如果有技能效果，添加到结算器
     if (effect) {
       this.skillResolver.addEffect(effect);
+    }
+
+    // 自爆：标记跳过白天
+    if (responseData.skipToNight) {
+      game.skipToNight = true;
     }
 
     // 记录操作日志

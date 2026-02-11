@@ -306,8 +306,12 @@ export function getRoleStatusText(player: GamePlayer): string {
   }
 
   // 守卫守护记录
-  if (player.role === 'guard' && player.abilities.lastGuardTarget) {
-    status.push(`上晚守护${player.abilities.lastGuardTarget}号`);
+  if (player.role === 'guard') {
+    const guardHistory: number[] = player.abilities.guardHistory || [];
+    if (guardHistory.length > 0) {
+      const last = guardHistory[guardHistory.length - 1];
+      status.push(`上晚守护${last === 0 ? '空守' : last + '号'}`);
+    }
   }
 
   // 摄梦人

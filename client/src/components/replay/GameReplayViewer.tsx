@@ -5,6 +5,7 @@ import {
   RoundReplayData,
   NightActionReplayRecord,
   DeathReplayInfo,
+  SpecialReplayEvent,
 } from '../../../../shared/src/types';
 import { useToast } from '../Toast';
 
@@ -12,6 +13,34 @@ interface GameReplayViewerProps {
   isOpen: boolean;
   onClose: () => void;
   replayData: GameReplayData | null;
+}
+
+/**
+ * 按目标聚合投票明细
+ * 格式: 5号←1,3,7号 / 2号←4,8号 / 弃票←6号
+ */
+function aggregateReplayVotes(
+  votes: { voterId: number; targetId: number | 'skip' }[]
+): string {
+  const targetToVoters = new Map<string, number[]>();
+  for (const v of votes) {
+    const key = v.targetId === 'skip' ? 'skip' : String(v.targetId);
+    if (!targetToVoters.has(key)) targetToVoters.set(key, []);
+    targetToVoters.get(key)!.push(v.voterId);
+  }
+  if (targetToVoters.size === 0) return '';
+
+  const entries = [...targetToVoters.entries()].sort((a, b) => {
+    if (a[0] === 'skip') return 1;
+    if (b[0] === 'skip') return -1;
+    return b[1].length - a[1].length;
+  });
+
+  return entries.map(([target, voters]) => {
+    const voterStr = voters.sort((a, b) => a - b).map(v => `${v}`).join(',');
+    const label = target === 'skip' ? '弃票' : `${target}号`;
+    return `${label}←${voterStr}号`;
+  }).join(' / ');
 }
 
 /**
@@ -64,6 +93,7 @@ function DeathBadge({ death }: { death: DeathReplayInfo }) {
       <span className="text-red-400">💀</span>
       <span className="text-gray-200">{death.playerId}号</span>
       <span className="text-gray-400">({death.roleName})</span>
+      {death.causeText && <span className="text-gray-500">{death.causeText}</span>}
     </span>
   );
 }
@@ -103,6 +133,16 @@ function RoundCard({ round, isLast }: { round: RoundReplayData; isLast: boolean 
               <span className="text-gray-400 text-sm">📋</span>
               <span className="text-gray-300 text-sm">{round.night.settlement}</span>
             </div>
+
+            {/* 夜间死亡 */}
+            {round.night.deaths.length > 0 && (
+              <div className="ml-6 flex items-center gap-2 flex-wrap">
+                <span className="text-gray-400 text-sm">出局:</span>
+                {round.night.deaths.map((death, i) => (
+                  <DeathBadge key={i} death={death} />
+                ))}
+              </div>
+            )}
           </div>
 
           {/* 白天阶段 */}
@@ -135,6 +175,11 @@ function RoundCard({ round, isLast }: { round: RoundReplayData; isLast: boolean 
                     )}
                   </div>
                 )}
+                {round.day.sheriffElection.votes.length > 0 && (
+                  <div className="text-xs text-gray-400 mt-1">
+                    {aggregateReplayVotes(round.day.sheriffElection.votes)}
+                  </div>
+                )}
               </div>
             )}
 
@@ -157,17 +202,27 @@ function RoundCard({ round, isLast }: { round: RoundReplayData; isLast: boolean 
                     <span className="text-gray-300">无人出局</span>
                   )}
                 </div>
-                {round.day.exileVote.tally.length > 0 && (
+                {round.day.exileVote.votes.length > 0 && (
                   <div className="text-xs text-gray-400 mt-1">
-                    票数: {round.day.exileVote.tally.map(t =>
-                      `${t.playerId}号=${t.voteCount}票`
-                    ).join(' ')}
+                    {aggregateReplayVotes(round.day.exileVote.votes)}
                   </div>
                 )}
               </div>
             )}
 
-            {/* 本回合死亡 */}
+            {/* 特殊事件（自爆、猎人开枪、骑士决斗等） */}
+            {round.day.specialEvents && round.day.specialEvents.length > 0 && (
+              <div className="ml-6 space-y-1">
+                {round.day.specialEvents.map((event, i) => (
+                  <div key={i} className="flex items-center gap-2 px-3 py-1.5 bg-orange-900/30 border border-orange-700/50 rounded text-sm">
+                    <span>{event.icon}</span>
+                    <span className="text-orange-200">{event.text}</span>
+                  </div>
+                ))}
+              </div>
+            )}
+
+            {/* 白天出局 */}
             {round.day.deaths.length > 0 && (
               <div className="ml-6 flex items-center gap-2 flex-wrap">
                 <span className="text-gray-400 text-sm">出局:</span>
@@ -317,11 +372,16 @@ export default function GameReplayViewer({
                       player.camp === 'wolf'
                         ? 'bg-red-900/50 text-red-200'
                         : 'bg-blue-900/50 text-blue-200'
-                    } ${player.deathRound ? 'opacity-60 line-through' : ''}`}
+                    } ${player.deathRound ? 'opacity-50' : ''}`}
                   >
                     {player.playerId}号{player.username}
                     ({getRoleEmoji(player.role)}{player.roleName})
                     {player.isSheriff && '🎖️'}
+                    {player.deathRound && (
+                      <span className="ml-1 text-gray-400">
+                        💀R{player.deathRound}{player.deathReason ? ` ${player.deathReason}` : ''}
+                      </span>
+                    )}
                   </span>
                 ))}
               </div>
@@ -352,12 +412,31 @@ export default function GameReplayViewer({
                   }`}>
                     {replayData.meta.winner === 'wolf' ? '狼人阵营' : '好人阵营'}获胜
                   </div>
-                  <div className="text-gray-400 text-sm mt-2">
-                    存活: {replayData.players
-                      .filter(p => !p.deathRound)
-                      .map(p => `${p.playerId}号(${p.roleName})`)
-                      .join(' ')}
-                  </div>
+                  {/* 存活者按阵营分类 */}
+                  {(() => {
+                    const survivors = replayData.players.filter(p => !p.deathRound);
+                    const wolfSurvivors = survivors.filter(p => p.camp === 'wolf');
+                    const goodSurvivors = survivors.filter(p => p.camp !== 'wolf');
+                    return (
+                      <div className="mt-3 space-y-1.5 text-sm">
+                        {goodSurvivors.length > 0 && (
+                          <div className="text-blue-300">
+                            <span className="text-gray-400">好人存活: </span>
+                            {goodSurvivors.map(p => `${p.playerId}号(${p.roleName})`).join(' ')}
+                          </div>
+                        )}
+                        {wolfSurvivors.length > 0 && (
+                          <div className="text-red-300">
+                            <span className="text-gray-400">狼人存活: </span>
+                            {wolfSurvivors.map(p => `${p.playerId}号(${p.roleName})`).join(' ')}
+                          </div>
+                        )}
+                        {survivors.length === 0 && (
+                          <div className="text-gray-400">无人存活</div>
+                        )}
+                      </div>
+                    );
+                  })()}
                 </div>
               </div>
             )}

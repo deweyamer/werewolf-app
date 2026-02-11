@@ -138,8 +138,9 @@ export class VotingSystem {
     const voter = game.players.find(p => p.playerId === voterId);
     if (!voter || !voter.alive) return false;
 
-    // 上警的人不能投票
-    if (game.sheriffElection.candidates.includes(voterId)) {
+    // 上警的人不能投票（包括退水的人）
+    if (game.sheriffElection.candidates.includes(voterId) ||
+        game.sheriffElection.withdrawn.includes(voterId)) {
       return false;
     }
 
@@ -172,6 +173,13 @@ export class VotingSystem {
 
       voteCounts.set(candidateId, (voteCounts.get(candidateId) || 0) + voteWeight);
     });
+
+    // 持久化加权计票结果到 sheriffElection.voteTally
+    const voteTally: { [candidateId: number]: number } = {};
+    voteCounts.forEach((count, candidateId) => {
+      voteTally[candidateId] = count;
+    });
+    game.sheriffElection.voteTally = voteTally;
 
     // 如果没有人投票，无警长
     if (voteCounts.size === 0) {

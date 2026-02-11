@@ -169,9 +169,10 @@ export class ReplayService {
       deaths: [],
     };
 
-    // 警长竞选（仅第1轮）
-    if (entry.round === 1 && game.sheriffElection) {
-      dayData.sheriffElection = this.convertSheriffElection(game);
+    // 警长竞选：优先从 roundHistory 快照读取，fallback 到 game.sheriffElection
+    const electionData = entry.sheriffElection || (entry.round === 1 ? game.sheriffElection : undefined);
+    if (electionData) {
+      dayData.sheriffElection = this.convertSheriffElection(game, electionData);
     }
 
     // 放逐投票
@@ -211,37 +212,64 @@ export class ReplayService {
   /**
    * 转换警长竞选数据
    */
-  private convertSheriffElection(game: Game): SheriffElectionReplayRecord {
-    const election = game.sheriffElection;
+  private convertSheriffElection(game: Game, election: any): SheriffElectionReplayRecord {
     if (!election) {
       return {
         candidates: [],
         withdrawn: [],
         votes: [],
+        tally: [],
         result: { winnerId: null, isTie: false },
       };
     }
 
-    const candidates = election.candidates.map(id => {
+    const candidates = (election.candidates || []).map((id: number) => {
       const p = game.players.find(p => p.playerId === id);
       return { playerId: id, playerName: p?.username || `${id}号` };
     });
 
-    const withdrawn = election.withdrawn.map(id => {
+    const withdrawn = (election.withdrawn || []).map((id: number) => {
       const p = game.players.find(p => p.playerId === id);
       return { playerId: id, playerName: p?.username || `${id}号` };
     });
 
-    const votes = Object.entries(election.votes).map(([voterId, targetId]) => {
+    const votes = Object.entries(election.votes || {}).map(([voterId, targetId]) => {
       const voter = game.players.find(p => p.playerId === Number(voterId));
-      const target = targetId !== 'skip' ? game.players.find(p => p.playerId === targetId) : null;
+      const target = targetId !== 'skip' ? game.players.find(p => p.playerId === Number(targetId)) : null;
       return {
         voterId: Number(voterId),
         voterName: voter?.username || `${voterId}号`,
-        targetId: targetId,
+        voteWeight: voter?.isSheriff ? 1.5 : 1,
+        targetId: targetId as number | 'skip',
         targetName: target?.username,
       };
     });
+
+    // 从 voteTally 生成计票汇总，或从 votes 重新计算
+    const tallyMap = new Map<number, number>();
+    if (election.voteTally) {
+      Object.entries(election.voteTally).forEach(([candidateId, count]) => {
+        tallyMap.set(Number(candidateId), count as number);
+      });
+    } else {
+      // fallback：从 votes 重新计算
+      votes.forEach(v => {
+        if (v.targetId !== 'skip') {
+          tallyMap.set(v.targetId as number, (tallyMap.get(v.targetId as number) || 0) + v.voteWeight);
+        }
+      });
+    }
+
+    const tally = Array.from(tallyMap.entries())
+      .map(([playerId, voteCount]) => {
+        const p = game.players.find(p => p.playerId === playerId);
+        return {
+          playerId,
+          playerName: p?.username || `${playerId}号`,
+          voteCount,
+        };
+      })
+      .sort((a, b) => b.voteCount - a.voteCount);
 
     const winner = election.result ? game.players.find(p => p.playerId === election.result) : null;
 
@@ -249,6 +277,7 @@ export class ReplayService {
       candidates,
       withdrawn,
       votes,
+      tally,
       result: {
         winnerId: election.result || null,
         winnerName: winner?.username,

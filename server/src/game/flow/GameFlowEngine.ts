@@ -20,9 +20,89 @@ export class GameFlowEngine {
   }
 
   /**
+   * 检查当前阶段是否已完成（所有预期操作已提交），用于自动推进判断
+   */
+  checkPhaseComplete(game: Game): { shouldAdvance: boolean; reason: string } {
+    const phase = game.currentPhase;
+    const na = game.nightActions;
+
+    switch (phase) {
+      case 'fear':
+        return { shouldAdvance: !!na.fearSubmitted, reason: '噩梦之影已操作' };
+      case 'dream':
+        return { shouldAdvance: !!na.dreamSubmitted, reason: '摄梦人已操作' };
+      case 'gargoyle':
+        return { shouldAdvance: !!na.gargoyleSubmitted, reason: '石像鬼已操作' };
+      case 'guard':
+        return { shouldAdvance: !!na.guardSubmitted, reason: '守卫已操作' };
+      case 'wolf':
+        return { shouldAdvance: !!na.wolfSubmitted, reason: '狼人已刀人' };
+      case 'wolf_beauty':
+        return { shouldAdvance: !!na.wolfBeautySubmitted, reason: '狼美人已操作' };
+      case 'witch':
+        return { shouldAdvance: !!na.witchSubmitted, reason: '女巫已操作' };
+      case 'seer':
+        return { shouldAdvance: !!na.seerSubmitted, reason: '预言家已操作' };
+      case 'gravekeeper':
+        return { shouldAdvance: !!na.gravekeeperSubmitted, reason: '守墓人已操作' };
+      case 'vote': {
+        const result = this.checkExileVoteComplete(game);
+        return result;
+      }
+      default:
+        return { shouldAdvance: false, reason: '当前阶段不支持自动推进' };
+    }
+  }
+
+  /**
+   * 检查放逐投票是否全员完成
+   */
+  private checkExileVoteComplete(game: Game): { shouldAdvance: boolean; reason: string } {
+    if (!game.exileVote || game.exileVote.phase !== 'voting') {
+      return { shouldAdvance: false, reason: '投票未开始' };
+    }
+    const alivePlayers = game.players.filter(p => p.alive);
+    const allVoted = alivePlayers.every(p => game.exileVote!.votes[p.playerId] !== undefined);
+    return { shouldAdvance: allVoted, reason: allVoted ? '所有玩家已投票' : '等待投票中' };
+  }
+
+  /**
+   * 判断某个夜间阶段是否应跳过（角色已死亡、不存在、或条件不满足）
+   */
+  private shouldSkipNightPhase(game: Game, phaseConfig: any): boolean {
+    if (!phaseConfig.isNightPhase) return false;
+
+    const phaseId = phaseConfig.id;
+
+    // settle 阶段不跳过
+    if (phaseId === 'settle') return false;
+
+    // fear 阶段仅在第1回合执行
+    if (phaseId === 'fear' && game.currentRound !== 1) return true;
+
+    // wolf 阶段：检查是否有任何狼人阵营存活
+    if (phaseId === 'wolf') {
+      return !game.players.some(p => p.camp === 'wolf' && p.alive);
+    }
+
+    // 其他夜间阶段：检查对应角色是否存在且存活
+    const actorRole = phaseConfig.actorRole;
+    if (actorRole) {
+      return !game.players.some(p => p.role === actorRole && p.alive);
+    }
+
+    return false;
+  }
+
+  /**
    * 推进游戏阶段
    */
-  async advancePhase(game: Game, scriptPhases: any[]): Promise<PhaseResult> {
+  async advancePhase(game: Game, scriptPhases: any[], _depth: number = 0): Promise<PhaseResult> {
+    // 防止递归跳过死亡角色时无限循环
+    if (_depth > 20) {
+      return { finished: false, message: '阶段推进递归过深' };
+    }
+
     const currentPhaseConfig = scriptPhases.find(p => p.id === game.currentPhase);
     if (!currentPhaseConfig) {
       return { finished: false, message: '当前阶段配置错误' };
@@ -75,6 +155,10 @@ export class GameFlowEngine {
       game.exileVote = undefined;
       game.currentPhase = firstNightPhase.id;
       game.currentPhaseType = 'night';
+      // 如果第一个夜间阶段角色已死亡，跳过
+      if (this.shouldSkipNightPhase(game, firstNightPhase)) {
+        return this.advancePhase(game, scriptPhases, _depth + 1);
+      }
       return { finished: false, phase: firstNightPhase.id, prompt: firstNightPhase.description };
     }
 
@@ -128,6 +212,47 @@ export class GameFlowEngine {
 
       const settleResult = await this.skillResolver.resolve(game, 'night');
 
+      // 第1回合且需要上警：延迟死亡，先进行上警流程
+      // 死亡玩家仍可参与上警和上警投票，上警结束后再公布死亡
+      const isFirstRoundWithElection = game.currentRound === 1 && !game.sheriffElectionDone;
+
+      if (isFirstRoundWithElection && settleResult.deaths.length > 0) {
+        // 暂存死亡信息，不立即 applyDeaths
+        // 需要保存死因映射，以便后续正确应用
+        const deathReasons: { [playerId: number]: string } = {};
+        for (const deadId of settleResult.deaths) {
+          const state = this.skillResolver.getPlayerState(deadId);
+          if (state?.deathReason) {
+            deathReasons[deadId] = state.deathReason;
+          }
+        }
+
+        game.pendingNightDeaths = {
+          deaths: [...settleResult.deaths],
+          messages: [...settleResult.messages],
+          settleResult: {
+            deaths: [...settleResult.deaths],
+            messages: [...settleResult.messages],
+            pendingEffects: [...settleResult.pendingEffects],
+            deathReasons,
+          },
+        };
+
+        // 保存本回合夜间操作到历史记录（记录死亡但不公布）
+        this.saveRoundHistory(game, settleResult.deaths, settleResult.messages.join('\n'));
+
+        // 清空夜间操作
+        game.nightActions = {};
+        this.skillResolver.clear();
+
+        // 直接启动警长竞选（死亡玩家仍可参与）
+        this.votingSystem.startSheriffElection(game);
+        game.currentPhase = 'sheriffElection';
+        game.currentPhaseType = 'day';
+        return { finished: false, phase: 'sheriffElection', prompt: '警长竞选开始，请选择是否上警' };
+      }
+
+      // 非第一轮或第一轮平安夜：正常处理死亡
       // 记录结算日志
       this.recordSettleLog(game, settleResult.messages, settleResult.deaths);
 
@@ -167,7 +292,7 @@ export class GameFlowEngine {
         return { finished: true, winner, message: `游戏结束，${winner === 'wolf' ? '狼人' : '好人'}获胜` };
       }
 
-      // 第1回合夜间结算后，自动启动警长竞选
+      // 第1回合夜间结算后（平安夜），自动启动警长竞选
       if (game.currentRound === 1 && !game.sheriffElectionDone) {
         this.votingSystem.startSheriffElection(game);
         game.currentPhase = 'sheriffElection';
@@ -227,6 +352,10 @@ export class GameFlowEngine {
     // 特殊处理：警长竞选（仅第一轮）
     if (nextPhaseConfig.id === 'sheriffElection' && game.sheriffElectionDone) {
       // 跳过警长竞选，直接进入讨论阶段
+      // 先应用延迟的夜晚死亡
+      const deathResult = await this.applyPendingNightDeaths(game);
+      if (deathResult?.finished) return deathResult;
+
       const discussionPhase = scriptPhases.find(p => p.id === 'discussion');
       if (discussionPhase) {
         game.currentPhase = 'discussion';
@@ -245,8 +374,18 @@ export class GameFlowEngine {
         game.exileVote = undefined;
         game.currentPhase = firstNightPhase.id;
         game.currentPhaseType = 'night';
+        // 如果第一个夜间阶段角色已死亡，跳过
+        if (this.shouldSkipNightPhase(game, firstNightPhase)) {
+          return this.advancePhase(game, scriptPhases, _depth + 1);
+        }
         return { finished: false, phase: firstNightPhase.id, prompt: `第${game.currentRound}回合夜晚开始` };
       }
+    }
+
+    // 进入讨论阶段前，应用第一轮延迟的夜晚死亡
+    if (nextPhaseConfig.id === 'discussion' && game.pendingNightDeaths) {
+      const deathResult = await this.applyPendingNightDeaths(game);
+      if (deathResult?.finished) return deathResult;
     }
 
     // 更新游戏阶段
@@ -264,6 +403,11 @@ export class GameFlowEngine {
       if (witch && witch.abilities.antidote && game.nightActions.wolfKill) {
         game.nightActions.witchKnowsVictim = game.nightActions.wolfKill;
       }
+    }
+
+    // 自动跳过死亡角色的夜间阶段
+    if (this.shouldSkipNightPhase(game, nextPhaseConfig)) {
+      return this.advancePhase(game, scriptPhases, _depth + 1);
     }
 
     return {
@@ -531,6 +675,116 @@ export class GameFlowEngine {
         nightActions: {},
         exileVote: game.exileVote ? JSON.parse(JSON.stringify(game.exileVote)) : undefined,
         deaths: dayDeaths,
+      });
+    }
+  }
+
+  /**
+   * 应用第一轮延迟的夜晚死亡
+   * 在上警结束、进入讨论阶段前调用
+   * 返回 PhaseResult（如果游戏因此结束）
+   */
+  async applyPendingNightDeaths(game: Game): Promise<PhaseResult | null> {
+    if (!game.pendingNightDeaths || game.pendingNightDeaths.deaths.length === 0) {
+      game.pendingNightDeaths = undefined;
+      return null;
+    }
+
+    const { deaths, messages, settleResult } = game.pendingNightDeaths;
+    const deathReasons: { [playerId: number]: string } = settleResult.deathReasons || {};
+
+    // 记录结算日志（现在才公布死亡信息）
+    this.recordSettleLog(game, messages, deaths);
+
+    // 真正应用死亡
+    for (const deadId of deaths) {
+      const player = game.players.find(p => p.playerId === deadId);
+      if (player && player.alive) {
+        player.alive = false;
+        if (deathReasons[deadId]) {
+          player.outReason = deathReasons[deadId];
+        }
+      }
+    }
+
+    // 处理死亡触发技能和警长死亡
+    const pendingEffects: any[] = settleResult.pendingEffects || [];
+    for (const deadPlayerId of deaths) {
+      const deadPlayer = game.players.find(p => p.playerId === deadPlayerId);
+      if (!deadPlayer) continue;
+
+      // 处理警长死亡
+      if (deadPlayer.isSheriff) {
+        this.votingSystem.handleSheriffDeath(game, deadPlayerId, 'night_death');
+      }
+
+      // 处理死亡触发技能（猎人开枪、黑狼王爆炸）
+      const handler = RoleRegistry.getHandler(deadPlayer.role);
+      if (handler && handler.hasDeathTrigger) {
+        const deathReason = deadPlayer.outReason || 'unknown';
+        const pendingEffect = await handler.onDeath(game, deadPlayer, deathReason);
+        if (pendingEffect) {
+          pendingEffects.push(pendingEffect);
+        }
+      }
+    }
+
+    // 存储待处理效果
+    if (pendingEffects.length > 0) {
+      const triggers = pendingEffects.map((effect: any) => {
+        const actor = game.players.find(p => p.playerId === effect.actorId);
+        const isHunter = effect.type === SkillEffectType.KILL && effect.priority === SkillPriority.HUNTER_SHOOT;
+        return {
+          id: effect.id,
+          type: isHunter ? 'hunter_shoot' as const : 'black_wolf_explode' as const,
+          actorId: effect.actorId,
+          actorRole: actor?.role || 'unknown',
+          message: effect.data?.message || '',
+          resolved: false,
+        };
+      });
+      game.pendingDeathTriggers = [...(game.pendingDeathTriggers || []), ...triggers];
+    }
+
+    // 清除延迟死亡数据
+    game.pendingNightDeaths = undefined;
+
+    // 检查游戏是否结束
+    const winner = this.checkWinner(game);
+    if (winner) {
+      game.status = 'finished';
+      game.currentPhase = 'finished';
+      game.winner = winner;
+      game.finishedAt = new Date().toISOString();
+      return { finished: true, winner, message: `游戏结束，${winner === 'wolf' ? '狼人' : '好人'}获胜` };
+    }
+
+    return null;
+  }
+
+  /**
+   * 保存警长选举数据到回合历史记录
+   * 在警长选举完成（投票计票或上帝指定）后调用
+   */
+  saveSheriffElectionToHistory(game: Game): void {
+    if (!game.sheriffElection) return;
+
+    if (!game.roundHistory) {
+      game.roundHistory = [];
+    }
+
+    // 深拷贝警长选举数据
+    const electionCopy = JSON.parse(JSON.stringify(game.sheriffElection));
+
+    const existingIndex = game.roundHistory.findIndex(h => h.round === game.currentRound);
+    if (existingIndex >= 0) {
+      game.roundHistory[existingIndex].sheriffElection = electionCopy;
+    } else {
+      game.roundHistory.push({
+        round: game.currentRound,
+        nightActions: {},
+        sheriffElection: electionCopy,
+        deaths: [],
       });
     }
   }

@@ -198,6 +198,7 @@ export interface SheriffElectionState {
   candidates: number[]; // 上警的玩家号位
   withdrawn: number[];  // 退水的玩家
   votes: { [voterId: number]: number | 'skip' }; // 投票记录
+  voteTally?: { [candidateId: number]: number }; // 加权计票结果（候选人 -> 得票数，含警长1.5票权重）
   result?: number;      // 当选警长
   tiedPlayers?: number[]; // 平票的玩家列表
 }
@@ -279,10 +280,22 @@ export interface NightActionsState {
   gravekeeperSubmitted?: boolean;
 }
 
+// 游戏事件（用于玩家端事件流）
+export interface GameEvent {
+  id: string;
+  timestamp: string;
+  round: number;
+  type: 'death' | 'phase' | 'vote_result' | 'sheriff' | 'round_start' | 'game_end' | 'sheriff_transfer' | 'boom' | 'night_action' | 'settlement';
+  icon: string;
+  text: string;
+  details?: string;
+}
+
 // 回合历史记录
 export interface RoundHistoryEntry {
   round: number;
   nightActions: NightActionsState;
+  sheriffElection?: SheriffElectionState;  // 警长选举数据（含投票明细和计票结果）
   exileVote?: ExileVoteState;
   deaths: number[];  // 该回合死亡的玩家
   settlementMessage?: string;  // 结算信息
@@ -337,6 +350,13 @@ export interface Game {
   // 待处理的死亡触发效果（猎人开枪、黑狼王爆炸等）
   pendingDeathTriggers?: PendingDeathTrigger[];
 
+  // 第一轮延迟死亡：夜晚结算的死亡信息暂存于此，上警结束后再公布和应用
+  pendingNightDeaths?: {
+    deaths: number[];               // 死亡玩家号位列表
+    messages: string[];             // 结算消息
+    settleResult: any;              // 完整结算结果（用于死亡触发处理）
+  };
+
   // 自爆标记：狼人自爆后跳过白天直接进入夜晚
   skipToNight?: boolean;
 
@@ -345,6 +365,7 @@ export interface Game {
   finishedAt?: string;
   winner?: 'wolf' | 'good';
   hasBot?: boolean; // 是否包含机器人玩家（测试模式）
+  autoAdvanceEnabled?: boolean; // 是否启用自动阶段推进（默认 true）
 }
 
 // ============================================
@@ -389,7 +410,9 @@ export type ClientMessage =
   // 死亡触发相关
   | { type: 'GOD_RESOLVE_DEATH_TRIGGER', triggerId: string, targetId: number | 'skip' } // 上帝处理猎人开枪/黑狼王爆炸
   // 狼人聊天
-  | { type: 'WOLF_CHAT_SEND', content: string };
+  | { type: 'WOLF_CHAT_SEND', content: string }
+  // 自动推进开关
+  | { type: 'GOD_TOGGLE_AUTO_ADVANCE', enabled: boolean };
 
 export interface PlayerAction {
   phase: GamePhase;
@@ -430,10 +453,14 @@ export type ServerMessage =
   | { type: 'SHERIFF_ELECTION_UPDATE', state: SheriffElectionState }
   // 警徽状态更新
   | { type: 'SHERIFF_BADGE_UPDATE', sheriffId: number, state: SheriffBadgeState, reason?: string }
+  // 警长投票结果（计票完成后广播给所有玩家）
+  | { type: 'SHERIFF_VOTE_RESULT', election: SheriffElectionState, winnerId: number | null, isTie: boolean }
   // 放逐投票更新
   | { type: 'EXILE_VOTE_UPDATE', state: ExileVoteState }
   // 狼人聊天消息
   | { type: 'WOLF_CHAT_MESSAGE', message: WolfChatMessage }
+  // 自动推进通知
+  | { type: 'AUTO_PHASE_ADVANCED', phase: GamePhase, reason: string }
   // 错误消息
   | { type: 'ERROR', message: string, code?: string };
 
@@ -514,7 +541,18 @@ export interface RoundReplayData {
     sheriffElection?: SheriffElectionReplayRecord;
     exileVote?: ExileVoteReplayRecord;
     deaths: DeathReplayInfo[];
+    /** 特殊白天事件（自爆、警徽流转等） */
+    specialEvents?: SpecialReplayEvent[];
   };
+}
+
+/**
+ * 特殊事件（自爆、猎人开枪、骑士决斗、警徽流转等）
+ */
+export interface SpecialReplayEvent {
+  type: 'boom' | 'hunter_shoot' | 'knight_duel' | 'sheriff_transfer' | 'sheriff_destroyed';
+  icon: string;
+  text: string;
 }
 
 /**
@@ -551,8 +589,14 @@ export interface SheriffElectionReplayRecord {
   votes: {
     voterId: number;
     voterName: string;
+    voteWeight: number;
     targetId: number | 'skip';
     targetName?: string;
+  }[];
+  tally: {
+    playerId: number;
+    playerName: string;
+    voteCount: number;
   }[];
   result: {
     winnerId: number | null;

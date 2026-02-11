@@ -5,6 +5,7 @@ import { wsService } from '../services/websocket';
 import { User } from '../../../shared/src/types';
 import { config } from '../config';
 import { useToast } from '../components/Toast';
+import ConfirmBottomSheet from '../components/ConfirmBottomSheet';
 
 export default function AdminDashboard() {
   const { user, token, clearAuth } = useAuthStore();
@@ -12,6 +13,7 @@ export default function AdminDashboard() {
   const [users, setUsers] = useState<Omit<User, 'passwordHash'>[]>([]);
   const [showCreateForm, setShowCreateForm] = useState(false);
   const [newUser, setNewUser] = useState({ username: '', password: '', role: 'player' as 'admin' | 'god' | 'player' });
+  const [deleteConfirm, setDeleteConfirm] = useState<{ userId: string } | null>(null);
 
   useEffect(() => {
     loadUsers();
@@ -58,8 +60,6 @@ export default function AdminDashboard() {
   };
 
   const handleDeleteUser = async (userId: string) => {
-    if (!confirm('确定要删除此用户吗？')) return;
-
     try {
       const response = await fetch(`${config.apiUrl}/admin/users/${userId}`, {
         method: 'DELETE',
@@ -178,7 +178,7 @@ export default function AdminDashboard() {
                     <td className="text-gray-300 py-3 px-4">
                       {u.id !== user?.userId && (
                         <button
-                          onClick={() => handleDeleteUser(u.id)}
+                          onClick={() => setDeleteConfirm({ userId: u.id })}
                           className="px-3 py-1 bg-red-600 hover:bg-red-700 text-white text-sm rounded transition"
                         >
                           删除
@@ -204,6 +204,22 @@ export default function AdminDashboard() {
           </div>
         )}
       </div>
+
+      <ConfirmBottomSheet
+        open={!!deleteConfirm}
+        title="确定要删除此用户吗？"
+        description="删除后该用户将无法登录，此操作不可恢复。"
+        variant="danger"
+        confirmLabel="删除"
+        cancelLabel="取消"
+        onConfirm={() => {
+          if (deleteConfirm) {
+            handleDeleteUser(deleteConfirm.userId);
+            setDeleteConfirm(null);
+          }
+        }}
+        onCancel={() => setDeleteConfirm(null)}
+      />
     </div>
   );
 }

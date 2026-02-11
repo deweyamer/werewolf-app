@@ -58,7 +58,7 @@ export class SocketManager {
         }
       });
 
-      socket.on('disconnect', () => {
+      socket.on('disconnect', async () => {
         console.log(`Client disconnected: ${socket.id}`);
         const user = this.socketUsers.get(socket.id);
         if (user) {
@@ -68,9 +68,23 @@ export class SocketManager {
             if (roomId === socket.id) continue;
 
             const game = this.gameService.getGame(roomId);
-            if (game && game.status !== 'waiting') {
-              // 游戏进行中,玩家断线但数据保留,支持重连
-              console.log(`Player ${user.username} disconnected from active game ${game.id}, data preserved for reconnection`);
+            if (game) {
+              if (game.status === 'waiting') {
+                // 等待中的房间：移除断连玩家并通知其他人
+                const player = game.players.find(p => p.userId === user.userId);
+                if (player) {
+                  await this.gameService.removePlayer(game.id, user.userId);
+                  this.io.to(game.id).emit('message', { type: 'PLAYER_LEFT', playerId: player.playerId } as ServerMessage);
+                  const updatedGame = this.gameService.getGame(game.id);
+                  if (updatedGame) {
+                    this.io.to(game.id).emit('message', { type: 'GAME_STATE_UPDATE', game: updatedGame } as ServerMessage);
+                  }
+                  console.log(`Player ${user.username} disconnected from waiting game ${game.id}, removed from room`);
+                }
+              } else {
+                // 游戏进行中,玩家断线但数据保留,支持重连
+                console.log(`Player ${user.username} disconnected from active game ${game.id}, data preserved for reconnection`);
+              }
             }
           }
 
@@ -173,6 +187,10 @@ export class SocketManager {
 
       case 'WOLF_CHAT_SEND':
         await this.handleWolfChat(socket, message.content, send);
+        break;
+
+      case 'GOD_TOGGLE_AUTO_ADVANCE':
+        await this.handleToggleAutoAdvance(socket, message.enabled, send);
         break;
 
       default:
@@ -332,6 +350,11 @@ export class SocketManager {
           if (game.status === 'waiting') {
             await this.gameService.removePlayer(game.id, user.userId);
             this.io.to(game.id).emit('message', { type: 'PLAYER_LEFT', playerId: player.playerId } as ServerMessage);
+            // 广播完整游戏状态，确保所有客户端同步
+            const updatedGame = this.gameService.getGame(game.id);
+            if (updatedGame) {
+              this.io.to(game.id).emit('message', { type: 'GAME_STATE_UPDATE', game: updatedGame } as ServerMessage);
+            }
           } else {
             console.log(`Player ${user.username} disconnected from game ${game.id}, but can reconnect`);
           }
@@ -578,7 +601,86 @@ export class SocketManager {
       if (updatedGame) {
         this.io.to(game.id).emit('message', { type: 'GAME_STATE_UPDATE', game: updatedGame } as ServerMessage);
       }
+
+      // 自动推进检查
+      await this.performAutoAdvanceIfReady(game.id);
     }
+  }
+
+  // ================= 自动阶段推进 =================
+
+  /**
+   * 检查并执行自动阶段推进，包括广播状态更新
+   * 支持递归（bot行动后可能触发下一轮推进），加深度保护
+   */
+  private async performAutoAdvanceIfReady(gameId: string, depth: number = 0): Promise<void> {
+    if (depth > 20) return;
+
+    const autoResult = await this.gameService.checkAndAutoAdvance(gameId);
+    if (!autoResult.advanced) return;
+
+    const finalGame = this.gameService.getGame(gameId);
+    if (!finalGame) return;
+
+    // 广播自动推进通知（上帝端可用于显示 toast）
+    this.io.to(gameId).emit('message', {
+      type: 'AUTO_PHASE_ADVANCED',
+      phase: autoResult.nextPhase,
+      reason: autoResult.reason || '',
+    } as ServerMessage);
+
+    // 广播阶段变更和游戏状态
+    this.io.to(gameId).emit('message', { type: 'GAME_STATE_UPDATE', game: finalGame } as ServerMessage);
+    this.io.to(gameId).emit('message', {
+      type: 'PHASE_CHANGED',
+      phase: autoResult.nextPhase,
+      prompt: autoResult.prompt || '',
+    } as ServerMessage);
+
+    if (autoResult.finished || finalGame.status === 'finished') {
+      this.io.to(gameId).emit('message', {
+        type: 'GAME_FINISHED',
+        winner: finalGame.winner!,
+      } as ServerMessage);
+      return;
+    }
+
+    // 如果有 bot 且 bot 行动后可能满足新阶段的完成条件，递归检查
+    if (finalGame.hasBot && finalGame.status === 'running') {
+      await this.performAutoAdvanceIfReady(gameId, depth + 1);
+    }
+  }
+
+  /**
+   * 上帝切换自动推进开关
+   */
+  private async handleToggleAutoAdvance(
+    socket: Socket,
+    enabled: boolean,
+    send: (msg: ServerMessage) => void
+  ) {
+    const user = this.socketUsers.get(socket.id);
+    if (!user || user.role !== 'god') {
+      send({ type: 'ERROR', message: '需要上帝权限' });
+      return;
+    }
+
+    const rooms = Array.from(socket.rooms);
+    const gameRoom = rooms.find(r => r !== socket.id);
+    if (!gameRoom) {
+      send({ type: 'ERROR', message: '未加入房间' });
+      return;
+    }
+
+    const game = this.gameService.getGame(gameRoom);
+    if (!game) {
+      send({ type: 'ERROR', message: '游戏不存在' });
+      return;
+    }
+
+    game.autoAdvanceEnabled = enabled;
+    this.io.to(game.id).emit('message', { type: 'GAME_STATE_UPDATE', game } as ServerMessage);
+    send({ type: 'ACTION_RESULT', success: true, message: enabled ? '已开启自动推进' : '已关闭自动推进' } as any);
   }
 
   // ================= 狼人聊天处理 =================
@@ -777,9 +879,9 @@ export class SocketManager {
     if (success) {
       const updatedGame = this.gameService.getGame(game.id);
       if (updatedGame && updatedGame.sheriffElection) {
-        // 检查是否所有有投票权的人都已投票（活着的非候选人）
+        // 检查是否所有有投票权的人都已投票（活着的非候选人、非退水者）
         const eligibleVoters = updatedGame.players.filter(
-          p => p.alive && !updatedGame.sheriffElection!.candidates.includes(p.playerId)
+          p => p.alive && !updatedGame.sheriffElection!.candidates.includes(p.playerId) && !updatedGame.sheriffElection!.withdrawn.includes(p.playerId)
         );
         const allVoted = eligibleVoters.every(
           p => updatedGame.sheriffElection!.votes[p.playerId] !== undefined
@@ -800,6 +902,14 @@ export class SocketManager {
               this.io.to(game.id).emit('message', {
                 type: 'SHERIFF_ELECTION_UPDATE',
                 state: finalGame.sheriffElection
+              } as ServerMessage);
+
+              // 广播投票结果给所有玩家（含投票明细和加权计票）
+              this.io.to(game.id).emit('message', {
+                type: 'SHERIFF_VOTE_RESULT',
+                election: finalGame.sheriffElection,
+                winnerId: result.winner,
+                isTie: result.isTie,
               } as ServerMessage);
             }
 
@@ -873,6 +983,9 @@ export class SocketManager {
         } as ServerMessage);
       }
       send({ type: 'ACTION_RESULT', success: true, message: '投票成功' });
+
+      // 自动推进检查（所有人投完后自动进入结算）
+      await this.performAutoAdvanceIfReady(game.id);
     } else {
       send({ type: 'ERROR', message: '投票失败' });
     }
@@ -918,6 +1031,9 @@ export class SocketManager {
         } as ServerMessage);
       }
       send({ type: 'ACTION_RESULT', success: true, message: 'PK投票成功' });
+
+      // 自动推进检查
+      await this.performAutoAdvanceIfReady(game.id);
     } else {
       send({ type: 'ERROR', message: 'PK投票失败' });
     }
@@ -1048,6 +1164,14 @@ export class SocketManager {
           this.io.to(game.id).emit('message', {
             type: 'SHERIFF_ELECTION_UPDATE',
             state: updatedGame.sheriffElection
+          } as ServerMessage);
+
+          // 广播最终选举结果（上帝指定）
+          this.io.to(game.id).emit('message', {
+            type: 'SHERIFF_VOTE_RESULT',
+            election: updatedGame.sheriffElection,
+            winnerId: targetId === 'none' ? null : targetId,
+            isTie: false,
           } as ServerMessage);
         }
       }
@@ -1259,6 +1383,14 @@ export class SocketManager {
         this.io.to(game.id).emit('message', {
           type: 'SHERIFF_ELECTION_UPDATE',
           state: updatedGame.sheriffElection
+        } as ServerMessage);
+
+        // 广播投票结果给所有玩家（含投票明细和加权计票）
+        this.io.to(game.id).emit('message', {
+          type: 'SHERIFF_VOTE_RESULT',
+          election: updatedGame.sheriffElection,
+          winnerId: result.winner,
+          isTie: result.isTie,
         } as ServerMessage);
       }
 

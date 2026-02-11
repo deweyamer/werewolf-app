@@ -19,6 +19,7 @@ export class GameService {
   private gameFlowEngine: GameFlowEngine;
   private botService: BotService;
   private saveQueue: Promise<void> = Promise.resolve();
+  private advancingGames: Set<string> = new Set(); // 并发锁：防止自动推进和手动推进竞态
 
   constructor(scriptService: ScriptService) {
     this.scriptService = scriptService;
@@ -302,45 +303,101 @@ export class GameService {
   }
 
   async advancePhase(gameId: string): Promise<{ success: boolean; nextPhase: GamePhase; prompt: string }> {
-    const game = this.getGame(gameId);
-    if (!game || game.status !== 'running') {
-      return { success: false, nextPhase: 'lobby', prompt: '游戏不存在或未开始' };
+    // 并发锁保护
+    if (this.advancingGames.has(gameId)) {
+      return { success: false, nextPhase: 'lobby', prompt: '阶段正在推进中' };
     }
+    this.advancingGames.add(gameId);
 
-    const scriptWithPhases = this.scriptService.getScript(game.scriptId);
-    if (!scriptWithPhases) {
-      return { success: false, nextPhase: 'lobby', prompt: '剧本不存在' };
-    }
+    try {
+      const game = this.getGame(gameId);
+      if (!game || game.status !== 'running') {
+        return { success: false, nextPhase: 'lobby', prompt: '游戏不存在或未开始' };
+      }
 
-    const { phases } = scriptWithPhases;
+      const scriptWithPhases = this.scriptService.getScript(game.scriptId);
+      if (!scriptWithPhases) {
+        return { success: false, nextPhase: 'lobby', prompt: '剧本不存在' };
+      }
 
-    // 使用GameFlowEngine推进阶段
-    const result = await this.gameFlowEngine.advancePhase(game, phases);
+      const { phases } = scriptWithPhases;
 
-    // 保存游戏状态
-    await this.saveGames();
+      // 使用GameFlowEngine推进阶段
+      const result = await this.gameFlowEngine.advancePhase(game, phases);
 
-    // 如果游戏结束，返回结束信息
-    if (result.finished) {
+      // 保存游戏状态
+      await this.saveGames();
+
+      // 如果游戏结束，返回结束信息
+      if (result.finished) {
+        return {
+          success: true,
+          nextPhase: 'finished',
+          prompt: result.message || '游戏结束',
+        };
+      }
+
+      // 如果游戏有机器人，自动执行机器人行动
+      if (game.hasBot && game.status === 'running') {
+        const newPhase = result.phase as GamePhase;
+        await this.botService.executeBotActionsForPhase(game, newPhase);
+        // 再次保存（机器人行动后状态可能变化）
+        await this.saveGames();
+      }
+
       return {
         success: true,
-        nextPhase: 'finished',
-        prompt: result.message || '游戏结束',
+        nextPhase: result.phase as GamePhase,
+        prompt: result.prompt || '进入下一阶段',
       };
+    } finally {
+      this.advancingGames.delete(gameId);
+    }
+  }
+
+  /**
+   * 检查当前阶段是否完成并自动推进
+   * 在玩家提交操作/投票后调用
+   */
+  async checkAndAutoAdvance(gameId: string): Promise<{
+    advanced: boolean;
+    nextPhase?: GamePhase;
+    prompt?: string;
+    reason?: string;
+    finished?: boolean;
+  }> {
+    const game = this.getGame(gameId);
+    if (!game || game.status !== 'running') {
+      return { advanced: false };
     }
 
-    // 如果游戏有机器人，自动执行机器人行动
-    if (game.hasBot && game.status === 'running') {
-      const newPhase = result.phase as GamePhase;
-      await this.botService.executeBotActionsForPhase(game, newPhase);
-      // 再次保存（机器人行动后状态可能变化）
-      await this.saveGames();
+    // 检查自动推进是否启用（默认启用）
+    if (game.autoAdvanceEnabled === false) {
+      return { advanced: false };
+    }
+
+    // 并发锁保护
+    if (this.advancingGames.has(gameId)) {
+      return { advanced: false };
+    }
+
+    const check = this.gameFlowEngine.checkPhaseComplete(game);
+    if (!check.shouldAdvance) {
+      return { advanced: false };
+    }
+
+    // 满足条件，执行推进（复用 advancePhase 逻辑）
+    const result = await this.advancePhase(gameId);
+    if (!result.success) {
+      return { advanced: false };
     }
 
     return {
-      success: true,
-      nextPhase: result.phase as GamePhase,
-      prompt: result.prompt || '进入下一阶段',
+      advanced: true,
+      nextPhase: result.nextPhase,
+      prompt: result.prompt,
+      reason: check.reason,
+      finished: result.nextPhase === 'finished',
     };
   }
 
@@ -426,6 +483,8 @@ export class GameService {
     if (!game) return { winner: null, isTie: false };
 
     const result = this.votingSystem.tallySheriffVotes(game);
+    // 保存警长选举数据到回合历史（含投票明细和加权计票结果）
+    this.gameFlowEngine.saveSheriffElectionToHistory(game);
     await this.saveGames();
     return result;
   }
@@ -528,6 +587,8 @@ export class GameService {
 
     const result = this.votingSystem.godAssignSheriff(game, targetId);
     if (result) {
+      // 保存警长选举数据到回合历史（含上帝指定结果）
+      this.gameFlowEngine.saveSheriffElectionToHistory(game);
       await this.saveGames();
     }
     return result;

@@ -1,4 +1,4 @@
-# 🐺 狼人杀 - 摄梦人12人版
+# 🐺 狼人杀 线下面杀版
 
 基于React + TypeScript + Socket.IO的多人在线狼人杀游戏
 

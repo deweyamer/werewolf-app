@@ -138,6 +138,12 @@ export class E2ETestExecutor {
     await this.advanceToPhase('settle');
     await this.gameService.advancePhase(this.game.id);
 
+    // 第1轮结算后可能进入警长竞选，快速跳过
+    this.game = this.gameService.getGame(this.game.id)!;
+    if (this.game.currentPhase === 'sheriffElection') {
+      await this.skipSheriffElection();
+    }
+
     // 检查游戏是否结束
     this.game = this.gameService.getGame(this.game.id)!;
     if (this.game.status === 'finished') {
@@ -265,6 +271,25 @@ export class E2ETestExecutor {
     await this.gameService.advancePhase(this.game!.id);
 
     this.game = this.gameService.getGame(this.game!.id)!;
+  }
+
+  /**
+   * 快速跳过警长竞选（无人上警，直接完成）
+   */
+  private async skipSheriffElection(): Promise<void> {
+    if (!this.game) return;
+
+    // 调用 startSheriffCampaign 时，如果无人上警会自动设置 sheriffElectionDone = true
+    const gameService = this.gameService as any;
+    await gameService.startSheriffCampaign(this.game.id);
+
+    this.game = this.gameService.getGame(this.game.id)!;
+
+    // 如果竞选已完成，推进到讨论阶段
+    if (this.game.sheriffElectionDone) {
+      await this.gameService.advancePhase(this.game.id);
+      this.game = this.gameService.getGame(this.game.id)!;
+    }
   }
 
   /**
@@ -488,7 +513,7 @@ export class TestScenarios {
         {
           roundNumber: 2,
           nightActions: [
-            { phase: 'fear', playerId: 1, target: 8 }, // 恐惧猎人（换个目标）
+            // fear 阶段仅在第1回合执行，第2轮自动跳过
             { phase: 'dream', playerId: 5, target: 2 }, // 再次梦2号（测试连续梦死）
             { phase: 'wolf', playerId: 2, target: 10 }, // 狼刀10号
             { phase: 'witch', playerId: 7, data: { actionType: 'none' } }, // 女巫不操作

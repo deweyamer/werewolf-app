@@ -2,10 +2,9 @@
  * GodConsole V2 — 上帝控制台
  *
  * 信息架构：
- *  P0 主画布 = 当前阶段操作（夜晚卡片 / 白天投票 / 警长竞选）
+ *  P0 主画布 = EventFeed Stream（事件流 + 嵌入式操作卡片）
  *  P1 右侧栏 = 神职技能概览 + 阵营存亡
- *  P2 Drawer  = 历史回溯（按需）
- *  P3 Bottom  = 复盘 / 导出入口
+ *  P2 Bottom  = 复盘 / 导出入口
  *
  * 自适应：桌面两栏 → 平板/手机单栏堆叠
  */
@@ -16,10 +15,11 @@ import { wsService } from '../services/websocket';
 import { ScriptV2, ServerMessage, GameReplayData } from '../../../shared/src/types';
 import { ROLE_INFO } from '../../../shared/src/constants';
 import { config } from '../config';
-import { getPhaseLabel, getPhaseHint, getRoleName, translateDeathReason } from '../utils/phaseLabels';
+import { getPhaseLabel, getRoleName, translateDeathReason } from '../utils/phaseLabels';
 import { useToast } from '../components/Toast';
 import { useGameSocket } from '../hooks/useGameSocket';
 import { useReplayData } from '../hooks/useReplayData';
+import ConfirmBottomSheet from '../components/ConfirmBottomSheet';
 
 // Sub-components — pre-game
 import RoleSelector from '../components/RoleSelector';
@@ -27,16 +27,11 @@ import RoomLobby from '../components/god/RoomLobby';
 import RoleAssignmentModal from '../components/god/RoleAssignmentModal';
 
 // Sub-components — V2 panels
-import PhaseProgressBar from '../components/god/PhaseProgressBar';
-import NightActionCards from '../components/god/NightActionCards';
+import EventFeedPanel from '../components/god/EventFeedPanel';
 import RoleStatusPanel from '../components/god/RoleStatusPanel';
 import CampOverviewPanel from '../components/god/CampOverviewPanel';
-import HistoryDrawer from '../components/god/HistoryDrawer';
 
 // Sub-components — existing
-import SheriffElectionPanel from '../components/god/SheriffElectionPanel';
-import ExileVotePanel from '../components/god/ExileVotePanel';
-import NightDeathNotification from '../components/god/NightDeathNotification';
 import PhaseTransitionOverlay from '../components/god/PhaseTransitionOverlay';
 import PlayerTableDrawer from '../components/god/PlayerTableDrawer';
 import GameReplayViewer from '../components/replay/GameReplayViewer';
@@ -57,10 +52,12 @@ export default function GodConsole() {
 
   // V2 UI state
   const [mobileSidebarOpen, setMobileSidebarOpen] = useState(false);
-  const [historyDrawerOpen, setHistoryDrawerOpen] = useState(false);
   const [isPlayerTableDrawerOpen, setIsPlayerTableDrawerOpen] = useState(false);
   const [isReplayViewerOpen, setIsReplayViewerOpen] = useState(false);
   const [replayData, setReplayData] = useState<GameReplayData | null>(null);
+
+  // Confirm bottom sheet
+  const [confirmSheet, setConfirmSheet] = useState<{ key: string; title: string; description?: string; variant: 'danger' | 'warning' | 'default'; onConfirm: () => void } | null>(null);
 
   // Phase transition overlay
   const [showTransition, setShowTransition] = useState(false);
@@ -70,10 +67,6 @@ export default function GodConsole() {
     prompt: string;
   } | null>(null);
   const [lastPhaseType, setLastPhaseType] = useState<string>('');
-
-  // Night death notification
-  const [lastNotifiedRound, setLastNotifiedRound] = useState(0);
-  const [showDeathNotice, setShowDeathNotice] = useState(false);
 
   const { generateReplayData } = useReplayData(currentGame);
 
@@ -96,21 +89,17 @@ export default function GodConsole() {
         setLastPhaseType(phaseType);
         break;
       }
+      case 'AUTO_PHASE_ADVANCED': {
+        const reason = (message as any).reason || '';
+        if (reason) {
+          toast(`自动推进: ${reason}`, 'info', 2000);
+        }
+        break;
+      }
     }
   }, [toast, lastPhaseType]);
 
   useGameSocket(handlePageMessage);
-
-  // Detect night settlement → show death notification
-  useEffect(() => {
-    const history = currentGame?.roundHistory;
-    if (!history?.length) return;
-    const latest = history[history.length - 1];
-    if (latest.round > lastNotifiedRound) {
-      setLastNotifiedRound(latest.round);
-      setShowDeathNotice(true);
-    }
-  }, [currentGame?.roundHistory?.length]);
 
   // Load scripts
   useEffect(() => { loadScripts(); }, []);
@@ -218,12 +207,35 @@ export default function GodConsole() {
   };
 
   const handleStartGame = () => {
-    if (!confirm('确定开始游戏吗？')) return;
-    wsService.send({ type: 'GOD_START_GAME' });
+    setConfirmSheet({
+      key: 'start-game',
+      title: '确定开始游戏吗？',
+      description: '开始后玩家将收到角色信息，游戏正式进入第一个夜晚。',
+      variant: 'warning',
+      onConfirm: () => {
+        setConfirmSheet(null);
+        wsService.send({ type: 'GOD_START_GAME' });
+      },
+    });
   };
 
   const handleAdvancePhase = () => {
     wsService.send({ type: 'GOD_ADVANCE_PHASE' });
+  };
+
+  const handleLeaveRoom = () => {
+    setConfirmSheet({
+      key: 'leave-room',
+      title: '确定要退出房间吗？',
+      description: '退出后可以重新加入或创建新房间。',
+      variant: 'warning',
+      onConfirm: () => {
+        setConfirmSheet(null);
+        wsService.send({ type: 'LEAVE_ROOM' });
+        wsService.clearRoomCode();
+        clearGame();
+      },
+    });
   };
 
   const handleLogout = () => {
@@ -339,9 +351,13 @@ export default function GodConsole() {
                 disabled={currentGame.players.some(p => !p.role)}>
                 开始游戏
               </button>
-              <button onClick={handleLogout}
+              <button onClick={handleLeaveRoom}
                 className="px-4 py-2 bg-white/10 hover:bg-white/20 text-gray-300 text-sm rounded-lg transition border border-white/10">
-                退出
+                退出房间
+              </button>
+              <button onClick={handleLogout}
+                className="px-4 py-2 bg-white/5 hover:bg-white/10 text-gray-400 text-sm rounded-lg transition border border-white/10">
+                退出登录
               </button>
             </div>
           </div>
@@ -394,6 +410,17 @@ export default function GodConsole() {
         {showRoleSelector && (
           <RoleSelector onComplete={handleCreateCustomScript} onCancel={() => setShowRoleSelector(false)} />
         )}
+
+        <ConfirmBottomSheet
+          open={!!confirmSheet}
+          title={confirmSheet?.title || ''}
+          description={confirmSheet?.description}
+          variant={confirmSheet?.variant || 'default'}
+          confirmLabel="确认"
+          cancelLabel="取消"
+          onConfirm={() => confirmSheet?.onConfirm()}
+          onCancel={() => setConfirmSheet(null)}
+        />
       </div>
     );
   }
@@ -401,8 +428,6 @@ export default function GodConsole() {
   // ============================
   // Running / Finished: main game UI
   // ============================
-  const NIGHT_PHASES = ['fear', 'dream', 'gargoyle', 'guard', 'wolf', 'wolf_beauty', 'witch', 'seer', 'gravekeeper'];
-  const SHERIFF_PHASES = ['sheriffElection', 'sheriffCampaign', 'sheriffVote'];
   const phase = currentGame.currentPhase;
 
   // 警长信息
@@ -451,11 +476,37 @@ export default function GodConsole() {
                 <button
                   onClick={handleAdvancePhase}
                   className="px-2.5 sm:px-3 py-1.5 bg-blue-600 hover:bg-blue-500 text-white text-[11px] sm:text-xs font-semibold rounded-lg transition shadow-lg shadow-blue-600/20"
+                  title={currentGame.currentPhaseType === 'night' ? '跳过当前角色操作，强制进入下一阶段' : '手动推进到下一阶段'}
                 >
-                  下一阶段 →
+                  {currentGame.currentPhaseType === 'night' ? '跳过 →' : '下一阶段 →'}
                 </button>
                 <button
-                  onClick={() => { if (confirm('确定要强制结束游戏吗？此操作不可撤回。')) wsService.send({ type: 'GOD_FORCE_END_GAME' }); }}
+                  onClick={() => {
+                    const newEnabled = !(currentGame.autoAdvanceEnabled !== false);
+                    wsService.send({ type: 'GOD_TOGGLE_AUTO_ADVANCE', enabled: newEnabled });
+                  }}
+                  className={`px-2 py-1.5 text-[11px] sm:text-xs rounded-lg transition border ${
+                    currentGame.autoAdvanceEnabled !== false
+                      ? 'bg-green-600/20 text-green-300 border-green-500/30'
+                      : 'bg-gray-600/20 text-gray-400 border-gray-500/30'
+                  }`}
+                  title={currentGame.autoAdvanceEnabled !== false ? '自动推进已开启：玩家操作完成后自动进入下一阶段' : '自动推进已关闭：需手动点击推进'}
+                >
+                  {currentGame.autoAdvanceEnabled !== false ? '自动' : '手动'}
+                </button>
+                <button
+                  onClick={() => {
+                    setConfirmSheet({
+                      key: 'force-end',
+                      title: '确定要强制结束游戏吗？',
+                      description: '此操作不可撤回，游戏将立即终止。',
+                      variant: 'danger',
+                      onConfirm: () => {
+                        setConfirmSheet(null);
+                        wsService.send({ type: 'GOD_FORCE_END_GAME' });
+                      },
+                    });
+                  }}
                   className="px-2 sm:px-2.5 py-1.5 bg-white/5 hover:bg-white/10 text-gray-400 text-[11px] sm:text-xs rounded-lg transition border border-white/10"
                 >
                   结束
@@ -467,9 +518,13 @@ export default function GodConsole() {
                 {currentGame.winner === 'wolf' ? '🐺 狼人胜' : '✨ 好人胜'}
               </span>
             )}
+            <button onClick={handleLeaveRoom}
+              className="px-2 py-1.5 bg-white/5 hover:bg-white/10 text-gray-400 text-[11px] rounded-lg transition border border-white/10 hidden sm:block">
+              退出房间
+            </button>
             <button onClick={handleLogout}
               className="px-2 py-1.5 bg-white/5 hover:bg-white/10 text-gray-500 text-[11px] rounded-lg transition border border-white/10 hidden sm:block">
-              退出
+              退出登录
             </button>
           </div>
         </div>
@@ -477,166 +532,9 @@ export default function GodConsole() {
 
       {/* ========== MAIN CONTENT ========== */}
       <main className="flex-1 flex flex-col lg:flex-row gap-2 sm:gap-3 p-2 sm:p-3 lg:p-4 max-w-[1600px] mx-auto w-full overflow-hidden">
-        {/* ---- Main Stage ---- */}
-        <div className="flex-1 min-w-0 flex flex-col gap-2 sm:gap-3 overflow-y-auto">
-          {/* Phase hint */}
-          {getPhaseHint(phase) && (
-            <div className="px-3 py-1.5 bg-white/5 rounded-lg border border-white/5">
-              <p className="text-[11px] sm:text-xs text-gray-400">{getPhaseHint(phase)}</p>
-            </div>
-          )}
-
-          {/* Progress bar (night only) */}
-          {currentGame.currentPhaseType === 'night' && <PhaseProgressBar game={currentGame} />}
-
-          {/* Night death notification */}
-          {showDeathNotice && currentGame.currentPhaseType === 'day' && (
-            <NightDeathNotification currentGame={currentGame} onDismiss={() => setShowDeathNotice(false)} />
-          )}
-
-          {/* Phase-specific panel */}
-          <div className="flex-1 min-h-0">
-            {(() => {
-              if (NIGHT_PHASES.includes(phase)) {
-                return <NightActionCards game={currentGame} />;
-              }
-              if (SHERIFF_PHASES.includes(phase)) {
-                return <SheriffElectionPanel currentGame={currentGame} />;
-              }
-              if (phase === 'vote' || phase === 'voteResult') {
-                const hasBoom = currentGame.players.some(p => !p.alive && p.outReason === 'self_destruct');
-                if (hasBoom && !currentGame.exileVote) {
-                  return (
-                    <div className="space-y-3">
-                      <div className="p-4 sm:p-6 bg-red-600/20 rounded-xl border-2 border-red-500">
-                        <h4 className="text-base sm:text-lg font-bold text-red-400 mb-2">狼人已自爆</h4>
-                        <p className="text-gray-300 text-xs sm:text-sm">
-                          跳过投票阶段，点击「下一阶段」进入白天结算。
-                        </p>
-                      </div>
-                      {currentGame.pendingSheriffTransfer?.reason === 'wolf_explosion' && (
-                        <ExileVotePanel currentGame={currentGame} />
-                      )}
-                    </div>
-                  );
-                }
-                return <ExileVotePanel currentGame={currentGame} />;
-              }
-              if (phase === 'discussion') {
-                const aliveWolves = currentGame.players.filter(p => p.camp === 'wolf' && p.alive && p.role !== 'wolf_beauty' && p.role !== 'black_wolf' && p.role !== 'gargoyle' && p.role !== 'nightmare');
-                const pending = currentGame.pendingSheriffTransfer;
-                return (
-                  <div className="space-y-3">
-                    <div className="p-4 sm:p-6 bg-amber-500/10 border border-amber-500/30 rounded-xl">
-                      <h4 className="text-base sm:text-lg font-bold text-amber-300 mb-2">白天讨论阶段</h4>
-                      <p className="text-gray-300 text-xs sm:text-sm">请主持玩家依次发言，发言结束后点击「下一阶段」进行投票。</p>
-                      {aliveWolves.length > 0 && (
-                        <div className="mt-3 p-3 bg-red-500/10 border border-red-500/30 rounded-lg">
-                          <p className="text-red-300 text-xs sm:text-sm">
-                            狼人可在讨论阶段自爆（{aliveWolves.map(w => `${w.playerId}号`).join('、')}）
-                          </p>
-                        </div>
-                      )}
-                    </div>
-                    {currentGame.skipToNight && (
-                      <div className="p-4 sm:p-6 bg-red-600/20 rounded-xl border-2 border-red-500 animate-pulse">
-                        <h4 className="text-base sm:text-lg font-bold text-red-400 mb-2">狼人已自爆</h4>
-                        <p className="text-gray-300 text-xs sm:text-sm">
-                          点击「下一阶段」将跳过白天剩余流程，直接进入下一回合夜晚。
-                        </p>
-                      </div>
-                    )}
-                    {pending?.reason === 'wolf_explosion' && (
-                      <div className="p-4 sm:p-6 bg-red-600/20 rounded-xl border border-red-500">
-                        <h4 className="text-base sm:text-lg font-bold text-red-400 mb-2">狼人自爆 - 请指定警徽归属</h4>
-                        <p className="text-gray-300 text-xs sm:text-sm mb-4">
-                          警长 {pending.fromPlayerId}号自爆，请指定警徽给谁
-                        </p>
-                        <div className="grid grid-cols-4 gap-3 mb-3">
-                          {pending.options.map(playerId => {
-                            const player = currentGame.players.find(p => p.playerId === playerId);
-                            return (
-                              <button
-                                key={playerId}
-                                onClick={() => wsService.send({ type: 'GOD_ASSIGN_SHERIFF', targetId: playerId })}
-                                className="p-3 bg-yellow-600/30 hover:bg-yellow-600/50 border border-yellow-500 rounded-lg transition"
-                              >
-                                <div className="text-white font-bold text-sm">{playerId}号</div>
-                                <div className="text-gray-300 text-xs">{player?.username}</div>
-                              </button>
-                            );
-                          })}
-                        </div>
-                        <button
-                          onClick={() => wsService.send({ type: 'GOD_ASSIGN_SHERIFF', targetId: 'none' })}
-                          className="w-full py-2 bg-gray-600/30 hover:bg-gray-600/50 border border-gray-500 text-gray-300 text-sm rounded-lg transition"
-                        >
-                          不给警徽
-                        </button>
-                      </div>
-                    )}
-                  </div>
-                );
-              }
-              if (phase === 'settle' || phase === 'daySettle') {
-                const unresolvedTriggers = (currentGame.pendingDeathTriggers || []).filter(t => !t.resolved);
-                return (
-                  <div className="space-y-4">
-                    <NightDeathNotification currentGame={currentGame} />
-                    {unresolvedTriggers.map(trigger => {
-                      const alivePlayers = currentGame.players.filter(p => p.alive && p.playerId !== trigger.actorId);
-                      const isHunter = trigger.type === 'hunter_shoot';
-                      const label = isHunter ? '猎人开枪' : '黑狼王爆炸';
-                      return (
-                        <div key={trigger.id} className={`p-4 sm:p-6 rounded-xl border-2 ${isHunter ? 'bg-orange-500/10 border-orange-500' : 'bg-purple-500/10 border-purple-500'}`}>
-                          <h4 className={`text-lg font-bold mb-2 ${isHunter ? 'text-orange-300' : 'text-purple-300'}`}>
-                            {isHunter ? '🏹' : '💥'} {trigger.actorId}号{label} — 请指定目标
-                          </h4>
-                          <p className="text-gray-300 text-sm mb-4">{trigger.message}</p>
-                          <div className="grid grid-cols-4 gap-3 mb-3">
-                            {alivePlayers.map(p => (
-                              <button
-                                key={p.playerId}
-                                onClick={() => wsService.send({ type: 'GOD_RESOLVE_DEATH_TRIGGER', triggerId: trigger.id, targetId: p.playerId })}
-                                className={`py-3 text-white font-bold rounded-lg transition border ${isHunter ? 'bg-orange-600/30 hover:bg-orange-600 border-orange-500/50 hover:border-orange-500' : 'bg-purple-600/30 hover:bg-purple-600 border-purple-500/50 hover:border-purple-500'}`}
-                              >
-                                {p.playerId}号
-                              </button>
-                            ))}
-                          </div>
-                          <button
-                            onClick={() => wsService.send({ type: 'GOD_RESOLVE_DEATH_TRIGGER', triggerId: trigger.id, targetId: 'skip' })}
-                            className="w-full py-3 bg-gray-600 hover:bg-gray-700 text-white font-bold rounded-lg transition"
-                          >
-                            {isHunter ? '放弃开枪' : '放弃爆炸'}
-                          </button>
-                        </div>
-                      );
-                    })}
-                  </div>
-                );
-              }
-              if (phase === 'hunter' || phase === 'knight') {
-                return (
-                  <div className="p-4 sm:p-6 bg-orange-500/10 border border-orange-500/30 rounded-xl">
-                    <h4 className="text-base sm:text-lg font-bold text-orange-300 mb-2">{getPhaseLabel(phase)}</h4>
-                    <p className="text-gray-300 text-xs sm:text-sm">{getPhaseHint(phase)}</p>
-                  </div>
-                );
-              }
-              if (phase === 'finished') {
-                return (
-                  <div className="p-4 sm:p-6 bg-green-500/10 border border-green-500/30 rounded-xl text-center">
-                    <h4 className="text-xl sm:text-2xl font-bold text-green-300 mb-2">
-                      {currentGame.winner === 'wolf' ? '🐺 狼人阵营获胜' : '✨ 好人阵营获胜'}
-                    </h4>
-                    <p className="text-gray-300 text-sm">游戏已结束，可通过底部按钮查看复盘或导出数据。</p>
-                  </div>
-                );
-              }
-              return null;
-            })()}
-          </div>
+        {/* ---- Main Stage: EventFeed ---- */}
+        <div className="flex-1 min-w-0 flex flex-col overflow-hidden rounded-xl border border-white/5 bg-black/10">
+          <EventFeedPanel game={currentGame} />
         </div>
 
         {/* ---- Right Sidebar (desktop only) ---- */}
@@ -659,12 +557,6 @@ export default function GodConsole() {
             </button>
             <button
               className="flex items-center gap-1 sm:gap-1.5 px-2.5 sm:px-3 py-1 sm:py-1.5 bg-white/5 hover:bg-white/10 text-gray-300 text-[11px] sm:text-xs rounded-lg transition border border-white/10"
-              onClick={() => setHistoryDrawerOpen(true)}
-            >
-              <span>📜</span> 回溯
-            </button>
-            <button
-              className="flex items-center gap-1 sm:gap-1.5 px-2.5 sm:px-3 py-1 sm:py-1.5 bg-white/5 hover:bg-white/10 text-gray-300 text-[11px] sm:text-xs rounded-lg transition border border-white/10"
               onClick={handleOpenReplayViewer}
             >
               <span>📊</span> 复盘
@@ -683,10 +575,16 @@ export default function GodConsole() {
             </button>
           </div>
           {/* 退出 (mobile) */}
-          <button onClick={handleLogout}
-            className="sm:hidden px-2 py-1 bg-white/5 hover:bg-white/10 text-gray-500 text-[11px] rounded-lg transition border border-white/10">
-            退出
-          </button>
+          <div className="sm:hidden flex gap-1.5">
+            <button onClick={handleLeaveRoom}
+              className="px-2 py-1 bg-white/5 hover:bg-white/10 text-gray-400 text-[11px] rounded-lg transition border border-white/10">
+              退出房间
+            </button>
+            <button onClick={handleLogout}
+              className="px-2 py-1 bg-white/5 hover:bg-white/10 text-gray-500 text-[11px] rounded-lg transition border border-white/10">
+              退出登录
+            </button>
+          </div>
         </div>
       </footer>
 
@@ -716,8 +614,6 @@ export default function GodConsole() {
         </div>
       </div>
 
-      <HistoryDrawer game={currentGame} open={historyDrawerOpen} onClose={() => setHistoryDrawerOpen(false)} />
-
       <PlayerTableDrawer
         isOpen={isPlayerTableDrawerOpen}
         onClose={() => setIsPlayerTableDrawerOpen(false)}
@@ -739,6 +635,17 @@ export default function GodConsole() {
           onDismiss={() => setShowTransition(false)}
         />
       )}
+
+      <ConfirmBottomSheet
+        open={!!confirmSheet}
+        title={confirmSheet?.title || ''}
+        description={confirmSheet?.description}
+        variant={confirmSheet?.variant || 'default'}
+        confirmLabel="确认"
+        cancelLabel="取消"
+        onConfirm={() => confirmSheet?.onConfirm()}
+        onCancel={() => setConfirmSheet(null)}
+      />
     </div>
   );
 }

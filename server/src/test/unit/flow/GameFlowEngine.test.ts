@@ -127,8 +127,9 @@ describe('GameFlowEngine', () => {
       const result = await engine.advancePhase(game, scriptPhases);
 
       // Should wrap to first night phase, incrementing round
+      // fear 阶段仅在第1回合执行，第2回合会自动跳过 fear 进入 wolf
       expect(game.currentRound).toBe(2);
-      expect(game.currentPhase).toBe('fear');
+      expect(game.currentPhase).toBe('wolf');
       expect(game.currentPhaseType).toBe('night');
     });
 

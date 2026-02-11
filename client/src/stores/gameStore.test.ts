@@ -4,7 +4,7 @@ import { createMockGame } from '../test/mockData/gameMocks';
 
 describe('gameStore', () => {
   beforeEach(() => {
-    useGameStore.setState({ currentGame: null });
+    useGameStore.setState({ currentGame: null, eventLog: [] });
   });
 
   it('初始化currentGame应该为null', () => {

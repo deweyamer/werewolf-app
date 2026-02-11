@@ -3,6 +3,14 @@ import { renderHook } from '@testing-library/react';
 import { useGameSocket } from './useGameSocket';
 import { createMockGame, createMockPlayer } from '../test/mockData/gameMocks';
 
+// vi.hoisted runs before vi.mock, so these variables are available to mock factories
+const { mockSetGame, mockAddEvents, _state } = vi.hoisted(() => {
+  const mockSetGame = vi.fn();
+  const mockAddEvents = vi.fn();
+  const _state = { mockCurrentGame: null as any };
+  return { mockSetGame, mockAddEvents, _state };
+});
+
 // Mock wsService
 const _messageHandlers: ((msg: any) => void)[] = [];
 vi.mock('../services/websocket', () => ({
@@ -17,18 +25,34 @@ vi.mock('../services/websocket', () => ({
   },
 }));
 
-// Mock gameStore
-const mockSetGame = vi.fn();
-let mockCurrentGame: any = null;
-vi.mock('../stores/gameStore', () => ({
-  useGameStore: () => ({
-    currentGame: mockCurrentGame,
-    setGame: mockSetGame,
-  }),
+// Mock eventFeedUtils
+vi.mock('../utils/eventFeedUtils', () => ({
+  deriveEventsFromStateDiff: vi.fn(() => []),
+  deriveEventsFromHistory: vi.fn(() => []),
 }));
 
+// Mock gameStore
+vi.mock('../stores/gameStore', () => {
+  const getStateFn = () => ({
+    currentGame: _state.mockCurrentGame,
+    eventLog: [],
+    setGame: mockSetGame,
+    addEvents: mockAddEvents,
+    addEvent: vi.fn(),
+    clearGame: vi.fn(),
+  });
+
+  const hookFn: any = () => ({
+    currentGame: _state.mockCurrentGame,
+    setGame: mockSetGame,
+    addEvents: mockAddEvents,
+  });
+  hookFn.getState = getStateFn;
+
+  return { useGameStore: hookFn };
+});
+
 function simulateMessage(msg: any) {
-  // Copy handlers since they may mutate during iteration
   [..._messageHandlers].forEach(h => h(msg));
 }
 
@@ -36,7 +60,8 @@ describe('useGameSocket', () => {
   beforeEach(() => {
     _messageHandlers.length = 0;
     mockSetGame.mockClear();
-    mockCurrentGame = null;
+    mockAddEvents.mockClear();
+    _state.mockCurrentGame = null;
   });
 
   describe('通用消息处理', () => {
@@ -60,7 +85,7 @@ describe('useGameSocket', () => {
 
     it('PLAYER_JOINED应该添加新玩家到currentGame', () => {
       const existingPlayer = createMockPlayer({ playerId: 1, username: 'Existing' });
-      mockCurrentGame = createMockGame({ players: [existingPlayer] });
+      _state.mockCurrentGame = createMockGame({ players: [existingPlayer] });
 
       const newPlayer = createMockPlayer({ playerId: 2, username: 'NewPlayer' });
       renderHook(() => useGameSocket());
@@ -74,7 +99,7 @@ describe('useGameSocket', () => {
     });
 
     it('PLAYER_JOINED无currentGame时不应该调用setGame', () => {
-      mockCurrentGame = null;
+      _state.mockCurrentGame = null;
       renderHook(() => useGameSocket());
 
       simulateMessage({ type: 'PLAYER_JOINED', player: createMockPlayer() });
@@ -97,7 +122,6 @@ describe('useGameSocket', () => {
     it('无回调时不应该报错', () => {
       renderHook(() => useGameSocket());
 
-      // Should not throw
       expect(() => {
         simulateMessage({ type: 'SOME_MESSAGE' });
       }).not.toThrow();
@@ -110,9 +134,7 @@ describe('useGameSocket', () => {
 
       simulateMessage({ type: 'ROOM_JOINED', game });
 
-      // setGame should be called (通用处理)
       expect(mockSetGame).toHaveBeenCalledWith(game);
-      // pageHandler should also be called (委派)
       expect(pageHandler).toHaveBeenCalledWith({ type: 'ROOM_JOINED', game });
     });
   });

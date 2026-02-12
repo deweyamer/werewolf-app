@@ -60,6 +60,11 @@ export class WitchHandler extends BaseRoleHandler {
         return { success: false, message: '今晚没有人被狼刀' };
       }
 
+      // 12人及以上局，首夜女巫不能自救
+      if (wolfKillTarget === action.playerId && game.currentRound === 1 && game.players.length >= 12) {
+        return { success: false, message: '12人及以上局首夜女巫不能自救' };
+      }
+
       // 创建救人技能效果
       const effect = this.createSkillEffect(
         SkillEffectType.SAVE,

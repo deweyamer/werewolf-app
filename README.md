@@ -1,9 +1,6 @@
 # 🐺 狼人杀 线下面杀版
 
-基于React + TypeScript + Socket.IO的多人在线狼人杀游戏
-
-[![Deploy to Railway](https://railway.app/button.svg)](https://railway.app/)
-[![Deploy with Vercel](https://vercel.com/button)](https://vercel.com/)
+基于 React + TypeScript + Socket.IO 的实时多人狼人杀游戏，专为线下面杀场景设计。上帝通过控制台推进游戏流程，玩家在手机/平板上接收角色信息和执行操作。
 
 ## 📚 文档导航
 
@@ -19,258 +16,155 @@
 - 📋 **[完整部署指南](./docs/deployment/DEPLOYMENT_GUIDE.md)** - 详细的部署方案对比
 - 🤖 **[GitHub Actions](./docs/deployment/GITHUB_ACTIONS_GUIDE.md)** - CI/CD自动化流程
 
-### 代码审查
-- 🔍 **[后端审查报告](./docs/review/BACKEND_REVIEW.md)** - 后端逻辑问题分析
-- 🔍 **[前端审查报告](./docs/review/FRONTEND_REVIEW.md)** - 前端易用性/简洁性/功能完备性分析
+## 功能特性
+
+### 核心功能
+- 实时 WebSocket 通信，多端同步
+- 三种用户角色：管理员（用户/剧本管理）、上帝（游戏主持）、玩家
+- 上帝控制台：创建房间、角色分配、流程推进、EventFeed 实时事件流
+- 玩家视图：加入房间、查看角色、执行夜间操作
+- 警长竞选系统（首日白天）
+- 游戏历史记录与回放
+- 自动胜负判定
+- Bot 托管（掉线玩家自动决策）
+
+### 支持角色
+
+| 角色 | 阵营 | 技能 |
+|-----|------|------|
+| 普通狼人 | 狼人 | 夜间刀人 |
+| 噩梦之影 | 狼人 | 首晚恐惧一名玩家使其无法行动 |
+| 狼美人 | 狼人 | 魅惑一名玩家，狼美人死亡时目标连结死亡 |
+| 石像鬼 | 狼人 | 独狼，每晚查验一名玩家的具体角色 |
+| 预言家 | 好人 | 每晚查验一名玩家的阵营 |
+| 女巫 | 好人 | 解药救人 + 毒药杀人（各一瓶） |
+| 猎人 | 好人 | 死亡时开枪带走一名玩家 |
+| 守卫 | 好人 | 每晚守护一人（不可连续守护同一人） |
+| 摄梦人 | 好人 | 每晚梦游一人，连续两晚同一人则目标梦死 |
+| 骑士 | 好人 | 白天决斗，对方是狼人则狼人死，否则自己死 |
+| 守墓人 | 好人 | 自动获得上轮被投票出局者的阵营信息 |
+| 平民 | 好人 | 依靠推理和投票 |
+
+### 预设剧本
+
+| 剧本 | 人数 | 狼人配置 | 好人配置 | 难度 |
+|------|------|---------|---------|------|
+| 12人标准剧本 | 12 | 4普通狼人 | 预言家+女巫+猎人+守卫+4民 | 中等 |
+| 9人标准剧本 | 9 | 狼美人+2普通狼人 | 预言家+女巫+猎人+3民 | 中等 |
+| 摄梦人剧本 | 12 | 噩梦之影+3普通狼人 | 摄梦人+预言家+女巫+猎人+4民 | 中等 |
+| 骑士狼美人剧本 | 12 | 狼美人+3普通狼人 | 骑士+预言家+女巫+守卫+4民 | 高 |
+| 守墓人石像鬼剧本 | 12 | 石像鬼+3普通狼人 | 守墓人+预言家+女巫+猎人+4民 | 高 |
+
+## 技术栈
+
+- **前端**: React 18 + TypeScript + Vite 5 + Tailwind CSS 3 + Zustand 4 + Socket.IO Client
+- **后端**: Node.js + Express 4 + Socket.IO 4 + TypeScript
+- **数据存储**: JSON 文件（无数据库依赖）
+- **测试**: Vitest + React Testing Library（前端）、Vitest + E2E 测试框架（后端）
 
 ## 项目结构
 
 ```
 werewolf-app/
-├── client/          # React前端应用
-│   ├── src/
-│   │   ├── pages/      # 页面组件
-│   │   ├── stores/     # Zustand状态管理
-│   │   ├── services/   # WebSocket服务
-│   │   └── config.ts   # 环境配置
-│   └── dist/        # 构建产物
-├── server/          # Node.js后端服务
-│   ├── src/
-│   │   ├── services/   # 业务服务层
-│   │   ├── websocket/  # WebSocket处理
-│   │   └── index.ts    # 服务入口
-│   └── data/        # 数据存储
-├── shared/          # 前后端共享代码
+├── client/          # React 前端
 │   └── src/
-│       ├── types.ts    # TypeScript类型定义
-│       └── constants.ts # 常量定义
-├── docs/            # 文档目录
-└── README.md        # 项目说明
+│       ├── pages/        # LoginPage, AdminDashboard, GodConsole, PlayerView
+│       ├── components/   # RoleActionPanel, god/, replay/, player/
+│       ├── hooks/        # useGameSocket, useReplayData
+│       ├── stores/       # Zustand: authStore, gameStore
+│       ├── services/     # WebSocket 服务
+│       └── utils/        # phaseLabels, eventFeedUtils, gameStats
+├── server/          # Node.js 后端
+│   └── src/
+│       ├── game/
+│       │   ├── flow/     # GameFlowEngine（阶段推进、胜负判定）
+│       │   ├── roles/    # IRoleHandler 实现（各角色处理器）
+│       │   ├── script/   # ScriptPresets, ScriptValidator
+│       │   └── skill/    # SkillResolver（技能优先级结算）
+│       ├── services/     # Auth, Game, Script, Bot, Replay
+│       └── websocket/    # SocketManager（消息路由）
+├── shared/          # 前后端共享
+│   └── src/
+│       ├── types.ts      # TypeScript 类型定义
+│       └── constants.ts  # 角色、阶段、出局原因等常量
+└── docs/            # 文档
 ```
-
-## 功能特性
-
-### 核心功能
-- ✅ 用户登录系统（管理员/上帝/玩家三种角色）
-- ✅ 玩家自注册功能
-- ✅ 管理员控制台（用户管理、剧本管理）
-- ✅ 上帝控制台（创建房间、角色分配、游戏流程控制）
-- ✅ 玩家视图（加入房间、接收角色、执行操作）
-- ✅ 实时WebSocket通信
-
-### 游戏功能
-- ✅ 摄梦人12人剧本（噩梦之影+摄梦人+女巫+预言家+猎人）
-- ✅ 随机角色分配功能
-- ✅ 警长竞选系统
-- ✅ 完整的夜间/白天流程
-- ✅ 游戏历史记录（支持回放）
-- ✅ 自动胜负判定
-
-### 测试功能
-- ✅ 自动创建12个测试账号（test1-test12）
-- ✅ 默认上帝账号（god/god）
-- ✅ 默认管理员账号（admin/admin123）
-
-## 技术栈
-
-### 前端
-- React 18
-- TypeScript
-- Vite
-- Tailwind CSS
-- Zustand (状态管理)
-- Socket.IO Client
-
-### 后端
-- Node.js
-- Express
-- Socket.IO
-- TypeScript
-- JSON文件存储
 
 ## 🚀 快速开始
 
-### 方式1：Docker部署（最简单）⭐推荐
-
-**前提**：已安装Docker
+### 方式1：Docker部署（推荐）
 
 ```bash
-# 1. 进入项目目录
 cd werewolf-app
-
-# 2. 一键启动
 docker-compose up -d
-
-# 3. 访问游戏
-# 浏览器打开: http://localhost:3000
+# 浏览器打开 http://localhost:3000
 ```
 
-**就这么简单！** 详见 [Docker部署文档](./docs/deployment/DOCKER_DEPLOYMENT.md)
+详见 [Docker部署文档](./docs/deployment/DOCKER_DEPLOYMENT.md)
 
----
+### 方式2：本地开发
 
-### 方式2：本地开发环境
-
-**前提**：已安装Node.js 18+
-
-#### 1. 安装依赖
+**前提**：Node.js 18+
 
 ```bash
-# 安装根依赖
+# 安装依赖
 npm install
-
-# 安装所有workspace依赖
 npm install --workspaces
-```
 
-#### 2. 启动开发环境
-
-```bash
-# 在根目录执行（同时启动前后端）
+# 启动开发环境（前后端同时启动）
 npm run dev
 ```
-
-或者分别启动：
-
-```bash
-# 启动后端 (端口 3001)
-cd server
-npm run dev
-
-# 启动前端 (端口 3000)
-cd client
-npm run dev
-```
-
-#### 3. 访问应用
 
 - 前端: http://localhost:3000
 - 后端API: http://localhost:3001/api
 - WebSocket: ws://localhost:3001
 
----
-
 ### 默认账号
 
-系统启动后会自动创建以下账号：
+系统首次启动自动创建：
 
 | 角色 | 用户名 | 密码 | 数量 |
 |-----|--------|------|------|
-| 管理员 | `admin` | `admin123` | 1个 |
-| 上帝 | `god` | `god` | 1个 |
-| 测试玩家 | `test1` ~ `test12` | `test` | 12个 |
+| 管理员 | `admin` | `admin123` | 1 |
+| 上帝 | `god` | `god` | 1 |
+| 测试玩家 | `test1` ~ `test12` | `test` | 12 |
 
-**玩家也可以自行注册**：在登录页面点击"注册"按钮创建新账号
+玩家也可以在登录页自行注册。
 
 ## 使用流程
 
-### 快速测试（单机测试）
+1. **上帝创建房间** — 登录 `god/god`，选择剧本，创建房间，记下 6 位房间码
+2. **玩家加入** — 各玩家登录后输入房间码加入
+3. **分配角色** — 上帝点击"分配角色" → "随机分配" → "确认分配"
+4. **开始游戏** — 上帝点击"开始游戏"，按阶段推进流程
 
-1. **启动服务**
-   ```bash
-   # 终端1：启动服务器
-   cd server && npm run dev
+### 游戏流程
 
-   # 终端2：启动客户端
-   cd client && npm run dev
-   ```
+**夜间阶段**（按技能优先级执行）：
+1. 恐惧阶段 — 噩梦之影恐惧目标（首晚）
+2. 守护阶段 — 守卫/摄梦人选择守护目标
+3. 狼人阶段 — 狼人投票刀人
+4. 女巫阶段 — 女巫使用解药/毒药
+5. 预言家阶段 — 预言家查验身份
+6. 夜间结算 — 公布死亡信息
 
-2. **上帝创建房间**
-   - 打开浏览器访问 http://localhost:3000
-   - 使用 `god` / `god` 登录
-   - 选择剧本，点击"创建房间"
-   - 记下6位房间码
+**白天阶段**：
+1. 警长竞选（仅第一天白天）
+2. 讨论 → 投票放逐
+3. 猎人/骑士技能触发
+4. 白天结算 → 进入下一轮
 
-3. **玩家加入房间**
-   - 打开12个浏览器标签页
-   - 依次使用 `test1` ~ `test12`（密码：`test`）登录
-   - 输入房间码加入房间
-
-4. **开始游戏**
-   - 上帝点击"分配角色"
-   - 点击"🎲 随机分配"自动分配角色
-   - 点击"确认分配"
-   - 点击"开始游戏"
-   - 按照阶段推进游戏
-
-### 详细使用指南
-
-请查看 [USER_GUIDE.md](./docs/development/USER_GUIDE.md) 获取完整的使用说明、角色介绍和游戏技巧。
-
-## 游戏流程
-
-### 角色配置（12人）
-- 狼人阵营（4人）：1噩梦之影 + 3普通狼人
-- 好人阵营（8人）：1摄梦人 + 1女巫 + 1预言家 + 1猎人 + 4平民
-
-### 夜间阶段
-1. **恐惧阶段**：噩梦之影恐惧一名玩家
-2. **守护阶段**：摄梦人守护一名玩家
-3. **狼人阶段**：狼人投票杀人
-4. **女巫阶段**：女巫使用解药/毒药
-5. **预言家阶段**：预言家查验身份
-6. **夜间结算**：公布死亡信息
-
-### 白天阶段
-1. **警长竞选**：首夜后进行（仅第一天）
-2. **投票放逐**：投票放逐一名玩家
-3. **猎人开枪**：猎人死亡时可开枪
-4. **白天结算**：进入下一轮
-
-### 胜利条件
-- **狼人胜利**：狼人数量 >= 好人数量
-- **好人胜利**：所有狼人出局
-
-## 开发指南
-
-### 添加新剧本
-
-编辑 `server/src/services/ScriptService.ts`，在 `ensureDefaultScript()` 方法中添加新的剧本配置。
-
-### 修改游戏逻辑
-
-主要游戏逻辑在 `server/src/services/GameService.ts` 中：
-- `submitAction()`: 处理玩家操作
-- `advancePhase()`: 推进游戏阶段
-- `settleNight()`: 夜间结算逻辑
-- `checkWinner()`: 判断胜负
-
-### WebSocket消息协议
-
-所有消息类型定义在 `shared/src/types.ts`：
-- `ClientMessage`: 客户端发送的消息
-- `ServerMessage`: 服务器发送的消息
-
-## 数据存储
-
-游戏数据以JSON格式存储在 `server/data/` 目录：
-- `users.json`: 用户数据
-- `scripts.json`: 剧本数据
-- `games.json`: 游戏数据
-- `sessions.json`: 会话数据
-
-## 构建生产版本
-
-```bash
-# 构建服务器
-cd server
-npm run build
-
-# 构建客户端
-cd client
-npm run build
-
-# 启动生产服务器
-cd server
-npm start
-```
+**胜利条件**：
+- 狼人胜利：存活狼人 ≥ 存活好人
+- 好人胜利：所有狼人出局
 
 ## 注意事项
 
 1. 首夜女巫不使用解药，被刀者会死亡
 2. 摄梦人守护的玩家被刀，摄梦人替死
-3. 警长死亡时可以传递警徽或撕毁警徽
+3. 警长死亡时可以传递或撕毁警徽
 4. 猎人被毒死不能开枪
+5. 守卫不能连续两晚守护同一人
 
 ## License
 

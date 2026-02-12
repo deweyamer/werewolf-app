@@ -1129,12 +1129,46 @@ export class SocketManager {
       return;
     }
 
-    // 验证是否需要上帝指定
+    // 验证是否需要上帝指定（包括：平票指定、警徽待分配、警长死亡待移交）
     const needAssign = game.sheriffBadgeState === 'pending_assign' ||
+      game.sheriffBadgeState === 'pending_transfer' ||
       (game.sheriffElection && game.sheriffElection.phase === 'tie');
 
     if (!needAssign) {
       send({ type: 'ERROR', message: '当前不需要指定警长' });
+      return;
+    }
+
+    // 如果是警长死亡移交，走 transferSheriffBadge 路径
+    if (game.sheriffBadgeState === 'pending_transfer' && game.pendingSheriffTransfer) {
+      let success: boolean;
+      let reason: string;
+      if (targetId === 'none') {
+        success = await this.gameService.destroySheriffBadge(game.id);
+        reason = '上帝选择不给警徽，警徽流失';
+      } else {
+        success = await this.gameService.transferSheriffBadge(game.id, targetId as number);
+        reason = `警徽传递给${targetId}号`;
+      }
+
+      if (success) {
+        const updatedGame = this.gameService.getGame(game.id);
+        if (updatedGame) {
+          this.io.to(game.id).emit('message', {
+            type: 'GAME_STATE_UPDATE',
+            game: updatedGame
+          } as ServerMessage);
+          this.io.to(game.id).emit('message', {
+            type: 'SHERIFF_BADGE_UPDATE',
+            sheriffId: updatedGame.sheriffId,
+            state: updatedGame.sheriffBadgeState || 'normal',
+            reason,
+          } as ServerMessage);
+        }
+        send({ type: 'ACTION_RESULT', success: true, message: reason });
+      } else {
+        send({ type: 'ERROR', message: '指定失败' });
+      }
       return;
     }
 

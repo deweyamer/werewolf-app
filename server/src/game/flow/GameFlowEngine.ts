@@ -23,6 +23,11 @@ export class GameFlowEngine {
    * 检查当前阶段是否已完成（所有预期操作已提交），用于自动推进判断
    */
   checkPhaseComplete(game: Game): { shouldAdvance: boolean; reason: string } {
+    // 死亡角色阶段不自动推进，由上帝手动确认（防止信息泄露）
+    if (game.currentPhaseDeadPlayer) {
+      return { shouldAdvance: false, reason: '死亡角色阶段，等待上帝确认推进' };
+    }
+
     const phase = game.currentPhase;
     const na = game.nightActions;
 
@@ -67,7 +72,9 @@ export class GameFlowEngine {
   }
 
   /**
-   * 判断某个夜间阶段是否应跳过（角色已死亡、不存在、或条件不满足）
+   * 判断某个夜间阶段是否应跳过
+   * 注意：角色已死亡的阶段不跳过（防止信息泄露），由上帝手动确认推进
+   * 只跳过「规则性不需要的阶段」（如 fear 仅首夜、wolf 阶段全狼死亡等）
    */
   private shouldSkipNightPhase(game: Game, phaseConfig: any): boolean {
     if (!phaseConfig.isNightPhase) return false;
@@ -80,15 +87,37 @@ export class GameFlowEngine {
     // fear 阶段仅在第1回合执行
     if (phaseId === 'fear' && game.currentRound !== 1) return true;
 
-    // wolf 阶段：检查是否有任何狼人阵营存活
+    // wolf 阶段：所有狼人死亡时不跳过（由上帝确认），除非游戏即将结束
+    // 但实际上所有狼人死亡时游戏已经结束，所以此处保留跳过逻辑
     if (phaseId === 'wolf') {
       return !game.players.some(p => p.camp === 'wolf' && p.alive);
     }
 
-    // 其他夜间阶段：检查对应角色是否存在且存活
+    // 其他夜间阶段：角色死亡不跳过，由 isDeadPlayerPhase 判断是否为空操作阶段
+    return false;
+  }
+
+  /**
+   * 判断某个夜间阶段是否为「死亡角色阶段」（角色已死亡但阶段仍需保留）
+   * 用于防止通过阶段跳过泄露角色死亡信息
+   */
+  private isDeadPlayerPhase(game: Game, phaseConfig: any): boolean {
+    if (!phaseConfig.isNightPhase) return false;
+
+    const phaseId = phaseConfig.id;
+
+    // settle、fear 不算
+    if (phaseId === 'settle' || phaseId === 'fear') return false;
+
+    // wolf 阶段由 shouldSkipNightPhase 处理
+    if (phaseId === 'wolf') return false;
+
+    // 检查对应角色是否存在但已死亡
     const actorRole = phaseConfig.actorRole;
     if (actorRole) {
-      return !game.players.some(p => p.role === actorRole && p.alive);
+      const hasRole = game.players.some(p => p.role === actorRole);
+      const hasAliveRole = game.players.some(p => p.role === actorRole && p.alive);
+      return hasRole && !hasAliveRole;
     }
 
     return false;
@@ -155,10 +184,16 @@ export class GameFlowEngine {
       game.exileVote = undefined;
       game.currentPhase = firstNightPhase.id;
       game.currentPhaseType = 'night';
-      // 如果第一个夜间阶段角色已死亡，跳过
+      // 如果该阶段应跳过（规则性跳过，如 fear 仅首夜）
       if (this.shouldSkipNightPhase(game, firstNightPhase)) {
         return this.advancePhase(game, scriptPhases, _depth + 1);
       }
+      // 检查是否为死亡角色阶段（保留阶段，由上帝确认推进）
+      if (this.isDeadPlayerPhase(game, firstNightPhase)) {
+        game.currentPhaseDeadPlayer = true;
+        return { finished: false, phase: firstNightPhase.id, prompt: `${firstNightPhase.description}（该角色已阵亡，请确认推进）` };
+      }
+      game.currentPhaseDeadPlayer = false;
       return { finished: false, phase: firstNightPhase.id, prompt: firstNightPhase.description };
     }
 
@@ -217,13 +252,17 @@ export class GameFlowEngine {
       const isFirstRoundWithElection = game.currentRound === 1 && !game.sheriffElectionDone;
 
       if (isFirstRoundWithElection && settleResult.deaths.length > 0) {
-        // 暂存死亡信息，不立即 applyDeaths
-        // 需要保存死因映射，以便后续正确应用
+        // SkillResolver.resolve() 内部已调用 applyDeaths 将玩家标记为死亡
+        // 第一轮需要延迟死亡，所以这里恢复死亡玩家的存活状态
+        // 先保存死因映射，然后恢复 alive
         const deathReasons: { [playerId: number]: string } = {};
         for (const deadId of settleResult.deaths) {
-          const state = this.skillResolver.getPlayerState(deadId);
-          if (state?.deathReason) {
-            deathReasons[deadId] = state.deathReason;
+          const player = game.players.find(p => p.playerId === deadId);
+          if (player) {
+            deathReasons[deadId] = player.outReason || '';
+            // 恢复为存活状态（延迟到上警结束后再真正死亡）
+            player.alive = true;
+            player.outReason = undefined;
           }
         }
 
@@ -374,10 +413,16 @@ export class GameFlowEngine {
         game.exileVote = undefined;
         game.currentPhase = firstNightPhase.id;
         game.currentPhaseType = 'night';
-        // 如果第一个夜间阶段角色已死亡，跳过
+        // 如果该阶段应跳过（规则性跳过）
         if (this.shouldSkipNightPhase(game, firstNightPhase)) {
           return this.advancePhase(game, scriptPhases, _depth + 1);
         }
+        // 检查是否为死亡角色阶段
+        if (this.isDeadPlayerPhase(game, firstNightPhase)) {
+          game.currentPhaseDeadPlayer = true;
+          return { finished: false, phase: firstNightPhase.id, prompt: `第${game.currentRound}回合夜晚开始（该角色已阵亡，请确认推进）` };
+        }
+        game.currentPhaseDeadPlayer = false;
         return { finished: false, phase: firstNightPhase.id, prompt: `第${game.currentRound}回合夜晚开始` };
       }
     }
@@ -405,11 +450,22 @@ export class GameFlowEngine {
       }
     }
 
-    // 自动跳过死亡角色的夜间阶段
+    // 跳过规则性不需要的阶段（如 fear 仅首夜）
     if (this.shouldSkipNightPhase(game, nextPhaseConfig)) {
       return this.advancePhase(game, scriptPhases, _depth + 1);
     }
 
+    // 检查是否为死亡角色阶段（保留阶段，由上帝确认推进）
+    if (this.isDeadPlayerPhase(game, nextPhaseConfig)) {
+      game.currentPhaseDeadPlayer = true;
+      return {
+        finished: false,
+        phase: nextPhaseConfig.id,
+        prompt: `${nextPhaseConfig.description}（该角色已阵亡，请确认推进）`,
+      };
+    }
+
+    game.currentPhaseDeadPlayer = false;
     return {
       finished: false,
       phase: nextPhaseConfig.id,

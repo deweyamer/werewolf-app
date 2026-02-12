@@ -3,7 +3,7 @@ import type { Game } from '../../../../shared/src/types';
 import { useGameStore } from '../../stores/gameStore';
 import { deriveGodEventsFromRoundHistory, deriveGodEventsFromNightActions } from '../../utils/eventFeedUtils';
 import {
-  EventCard, SectionHeader, NightActionProgressCard, DeathTriggerCard,
+  EventCard, SectionHeader, NightActionProgressCard, DeadPlayerPhaseCard, DeathTriggerCard,
   SheriffAssignCard, SheriffElectionLiveCard, ExileVoteLiveCard,
   DiscussionCard, GameFinishedCard,
 } from './EventFeedCards';
@@ -136,6 +136,7 @@ export default function EventFeedPanel({ game }: { game: Game }) {
 
             {/* === ACTIVE OPERATION CARDS === */}
             <div className="space-y-2 pb-2">
+              {game.currentPhaseDeadPlayer && isNight && <DeadPlayerPhaseCard game={game} />}
               {isSheriff && game.sheriffElection && <SheriffElectionLiveCard game={game} />}
               {!isSheriff && game.sheriffElection && (game.sheriffElection.phase === 'done' || game.sheriffElection.phase === 'tie') && <SheriffElectionLiveCard game={game} />}
               {phase === 'discussion' && <DiscussionCard game={game} />}

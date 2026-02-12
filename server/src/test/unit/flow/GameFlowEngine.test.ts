@@ -17,13 +17,13 @@ describe('GameFlowEngine', () => {
   let votingSystem: VotingSystem;
   let game: Game;
 
-  // Minimal script phases for testing
+  // Minimal script phases for testing (with actorRole for dead player phase detection)
   const scriptPhases = [
     { id: 'lobby', order: 0, isNightPhase: false, description: '等待开始' },
-    { id: 'fear', order: 1, isNightPhase: true, description: '噩梦之影恐惧' },
+    { id: 'fear', order: 1, isNightPhase: true, description: '噩梦之影恐惧', actorRole: 'nightmare' },
     { id: 'wolf', order: 2, isNightPhase: true, description: '狼人行动' },
-    { id: 'witch', order: 3, isNightPhase: true, description: '女巫行动' },
-    { id: 'seer', order: 4, isNightPhase: true, description: '预言家查验' },
+    { id: 'witch', order: 3, isNightPhase: true, description: '女巫行动', actorRole: 'witch' },
+    { id: 'seer', order: 4, isNightPhase: true, description: '预言家查验', actorRole: 'seer' },
     { id: 'settle', order: 5, isNightPhase: false, description: '夜间结算' },
     { id: 'sheriffElection', order: 6, isNightPhase: false, description: '警长竞选' },
     { id: 'discussion', order: 7, isNightPhase: false, description: '讨论发言' },
@@ -81,9 +81,12 @@ describe('GameFlowEngine', () => {
 
       // Should advance to settle and process night settlement
       expect(game.nightActions).toEqual({});
-      // Player 10 should be dead (wolf kill with no protection)
+      // 第1轮死亡延迟到上警结束后公布，此时 player 10 仍然存活
+      // 死亡信息暂存在 pendingNightDeaths 中
       const player10 = game.players.find(p => p.playerId === 10);
-      expect(player10?.alive).toBe(false);
+      expect(player10?.alive).toBe(true);
+      expect(game.pendingNightDeaths).toBeDefined();
+      expect(game.pendingNightDeaths!.deaths).toContain(10);
     });
 
     it('settle 阶段无狼刀时应该平安夜', async () => {
@@ -139,6 +142,86 @@ describe('GameFlowEngine', () => {
 
       expect(result.finished).toBe(false);
       expect(result.message).toContain('配置错误');
+    });
+  });
+
+  // ─────────────────────────────────────────────
+  // 死亡角色阶段不跳过（防止信息泄露）
+  // ─────────────────────────────────────────────
+  describe('死亡角色阶段保留', () => {
+    it('预言家死亡后 seer 阶段不应被跳过，应标记为 deadPlayerPhase', async () => {
+      // 杀死预言家
+      const seer = game.players.find(p => p.role === 'seer');
+      seer!.alive = false;
+      seer!.outReason = 'wolf_kill';
+
+      game.currentPhase = 'witch';
+      game.currentPhaseType = 'night';
+
+      const result = await engine.advancePhase(game, scriptPhases);
+
+      // 应该停在 seer 阶段，而不是跳过
+      expect(result.phase).toBe('seer');
+      expect(game.currentPhase).toBe('seer');
+      expect(game.currentPhaseDeadPlayer).toBe(true);
+      expect(result.prompt).toContain('已阵亡');
+    });
+
+    it('女巫死亡后 witch 阶段不应被跳过', async () => {
+      const witch = game.players.find(p => p.role === 'witch');
+      witch!.alive = false;
+      witch!.outReason = 'wolf_kill';
+
+      game.currentPhase = 'wolf';
+      game.currentPhaseType = 'night';
+
+      const result = await engine.advancePhase(game, scriptPhases);
+
+      expect(result.phase).toBe('witch');
+      expect(game.currentPhase).toBe('witch');
+      expect(game.currentPhaseDeadPlayer).toBe(true);
+    });
+
+    it('角色存活时不应标记为 deadPlayerPhase', async () => {
+      game.currentPhase = 'wolf';
+      game.currentPhaseType = 'night';
+
+      const result = await engine.advancePhase(game, scriptPhases);
+
+      expect(result.phase).toBe('witch');
+      expect(game.currentPhaseDeadPlayer).toBe(false);
+    });
+
+    it('死亡角色阶段不应自动推进（checkPhaseComplete）', async () => {
+      const seer = game.players.find(p => p.role === 'seer');
+      seer!.alive = false;
+
+      game.currentPhase = 'seer';
+      game.currentPhaseDeadPlayer = true;
+
+      const check = engine.checkPhaseComplete(game);
+      expect(check.shouldAdvance).toBe(false);
+      expect(check.reason).toContain('死亡角色');
+    });
+
+    it('进入下一回合时，死亡角色的阶段应保留', async () => {
+      // 杀死预言家和女巫
+      const seer = game.players.find(p => p.role === 'seer');
+      seer!.alive = false;
+      const witch = game.players.find(p => p.role === 'witch');
+      witch!.alive = false;
+
+      game.currentPhase = 'daySettle';
+      game.currentRound = 1;
+
+      await engine.advancePhase(game, scriptPhases);
+
+      // fear 在第2回合被跳过，wolf 阶段有存活狼人不跳过
+      // 但 wolf 没有 actorRole 所以不会被标记为 deadPlayerPhase
+      // 应该进入 wolf 阶段
+      expect(game.currentRound).toBe(2);
+      expect(game.currentPhase).toBe('wolf');
+      expect(game.currentPhaseDeadPlayer).toBe(false);
     });
   });
 
@@ -313,10 +396,10 @@ describe('GameFlowEngine', () => {
     // 包含 guard 阶段的 scriptPhases
     const phasesWithGuard = [
       { id: 'lobby', order: 0, isNightPhase: false, description: '等待开始' },
-      { id: 'guard', order: 1, isNightPhase: true, description: '守卫行动' },
+      { id: 'guard', order: 1, isNightPhase: true, description: '守卫行动', actorRole: 'guard' },
       { id: 'wolf', order: 2, isNightPhase: true, description: '狼人行动' },
-      { id: 'witch', order: 3, isNightPhase: true, description: '女巫行动' },
-      { id: 'seer', order: 4, isNightPhase: true, description: '预言家查验' },
+      { id: 'witch', order: 3, isNightPhase: true, description: '女巫行动', actorRole: 'witch' },
+      { id: 'seer', order: 4, isNightPhase: true, description: '预言家查验', actorRole: 'seer' },
       { id: 'settle', order: 5, isNightPhase: false, description: '夜间结算' },
       { id: 'sheriffElection', order: 6, isNightPhase: false, description: '警长竞选' },
       { id: 'discussion', order: 7, isNightPhase: false, description: '讨论发言' },
@@ -392,9 +475,11 @@ describe('GameFlowEngine', () => {
       await engine.advancePhase(game, phasesWithGuard); // witch → seer
       await engine.advancePhase(game, phasesWithGuard); // seer → settle
 
-      // 10号应该死亡
+      // 第1轮死亡延迟到上警结束后公布，10号此时仍存活
       const player10 = game.players.find(p => p.playerId === 10);
-      expect(player10?.alive).toBe(false);
+      expect(player10?.alive).toBe(true);
+      expect(game.pendingNightDeaths).toBeDefined();
+      expect(game.pendingNightDeaths!.deaths).toContain(10);
     });
   });
 });

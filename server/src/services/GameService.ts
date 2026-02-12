@@ -563,8 +563,13 @@ export class GameService {
     const game = this.getGame(gameId);
     if (!game) return false;
 
+    // 保存移交前的信息（transfer 后 pendingSheriffTransfer 会被清除）
+    const fromPlayerId = game.pendingSheriffTransfer?.fromPlayerId;
+    const reason = game.pendingSheriffTransfer?.reason || 'death';
+
     const result = this.votingSystem.transferSheriffBadge(game, targetId);
-    if (result) {
+    if (result && fromPlayerId) {
+      this.saveSheriffTransferToHistory(game, fromPlayerId, targetId, reason);
       await this.saveGames();
     }
     return result;
@@ -574,11 +579,38 @@ export class GameService {
     const game = this.getGame(gameId);
     if (!game) return false;
 
+    // 保存流失前的信息
+    const fromPlayerId = game.pendingSheriffTransfer?.fromPlayerId;
+    const reason = game.pendingSheriffTransfer?.reason || 'death';
+
     const result = this.votingSystem.destroySheriffBadge(game);
-    if (result) {
+    if (result && fromPlayerId) {
+      this.saveSheriffTransferToHistory(game, fromPlayerId, 'destroyed', reason);
+      await this.saveGames();
+    } else if (result) {
       await this.saveGames();
     }
     return result;
+  }
+
+  /**
+   * 保存警徽移交记录到当前回合历史
+   */
+  private saveSheriffTransferToHistory(game: Game, fromPlayerId: number, toPlayerId: number | 'destroyed', reason: string): void {
+    if (!game.roundHistory) game.roundHistory = [];
+    const entry = game.roundHistory.find(h => h.round === game.currentRound);
+    const record = { fromPlayerId, toPlayerId, reason };
+    if (entry) {
+      if (!entry.sheriffTransfers) entry.sheriffTransfers = [];
+      entry.sheriffTransfers.push(record);
+    } else {
+      game.roundHistory.push({
+        round: game.currentRound,
+        nightActions: {} as any,
+        deaths: [],
+        sheriffTransfers: [record],
+      });
+    }
   }
 
   async godAssignSheriff(gameId: string, targetId: number | 'none'): Promise<boolean> {

@@ -291,6 +291,13 @@ export interface GameEvent {
   details?: string;
 }
 
+// 警徽移交记录
+export interface SheriffTransferRecord {
+  fromPlayerId: number;   // 原警长
+  toPlayerId: number | 'destroyed';  // 新警长 或 警徽流失
+  reason: string;         // 'death' | 'wolf_explosion' | 'tie' 等
+}
+
 // 回合历史记录
 export interface RoundHistoryEntry {
   round: number;
@@ -299,6 +306,7 @@ export interface RoundHistoryEntry {
   exileVote?: ExileVoteState;
   deaths: number[];  // 该回合死亡的玩家
   settlementMessage?: string;  // 结算信息
+  sheriffTransfers?: SheriffTransferRecord[];  // 本回合的警徽移交记录
 }
 
 // 待处理的死亡触发效果
@@ -359,6 +367,9 @@ export interface Game {
 
   // 自爆标记：狼人自爆后跳过白天直接进入夜晚
   skipToNight?: boolean;
+
+  // 当前夜间阶段是否为死亡角色的空操作阶段（由上帝手动确认推进，防止信息泄露）
+  currentPhaseDeadPlayer?: boolean;
 
   createdAt: string;
   startedAt?: string;

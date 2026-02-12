@@ -65,11 +65,12 @@ const NIGHT_ROLE_CONFIGS: NightRoleConfig[] = [
 
 export function NightActionProgressCard({ game }: { game: Game }) {
   const na = game.nightActions;
+  const allRoles = new Set(game.players.map(p => p.role));
   const aliveRoles = new Set(game.players.filter(p => p.alive).map(p => p.role));
 
-  // 只显示本局有存活玩家的角色
+  // 显示本局所有角色（包括已死亡的），避免通过缺失阶段泄露信息
   const visibleConfigs = NIGHT_ROLE_CONFIGS.filter(cfg =>
-    cfg.roles.some(r => aliveRoles.has(r))
+    cfg.roles.some(r => allRoles.has(r))
   );
 
   if (visibleConfigs.length === 0) return null;
@@ -82,15 +83,23 @@ export function NightActionProgressCard({ game }: { game: Game }) {
           const submittedKey = `${cfg.key}Submitted` as keyof typeof na;
           const submitted = !!na[submittedKey];
           const isCurrent = game.currentPhase === cfg.phaseKey;
+          const isRoleDead = cfg.roles.some(r => allRoles.has(r)) && !cfg.roles.some(r => aliveRoles.has(r));
+          const isDeadPhase = isCurrent && game.currentPhaseDeadPlayer;
 
           let statusIcon: string;
           let statusColor: string;
           if (submitted) {
             statusIcon = '✓';
             statusColor = 'text-green-400';
+          } else if (isDeadPhase) {
+            statusIcon = '✗';
+            statusColor = 'text-red-400';
           } else if (isCurrent) {
             statusIcon = '◉';
             statusColor = 'text-yellow-400';
+          } else if (isRoleDead) {
+            statusIcon = '✗';
+            statusColor = 'text-red-400/50';
           } else {
             statusIcon = '·';
             statusColor = 'text-gray-600';
@@ -100,18 +109,53 @@ export function NightActionProgressCard({ game }: { game: Game }) {
             <div
               key={cfg.key}
               className={`flex items-center gap-1.5 px-2 py-1.5 rounded-lg border transition-all ${
-                isCurrent
-                  ? 'bg-yellow-500/10 border-yellow-500/30'
-                  : 'bg-white/5 border-white/5'
+                isDeadPhase
+                  ? 'bg-red-500/10 border-red-500/30'
+                  : isCurrent
+                    ? 'bg-yellow-500/10 border-yellow-500/30'
+                    : 'bg-white/5 border-white/5'
               }`}
             >
-              <span className="text-xs">{cfg.icon}</span>
-              <span className="text-[11px] text-gray-300 truncate flex-1">{cfg.label}</span>
+              <span className={`text-xs ${isRoleDead ? 'opacity-50' : ''}`}>{cfg.icon}</span>
+              <span className={`text-[11px] truncate flex-1 ${isRoleDead ? 'text-gray-500 line-through' : 'text-gray-300'}`}>{cfg.label}</span>
               <span className={`text-xs font-bold ${statusColor}`}>{statusIcon}</span>
             </div>
           );
         })}
       </div>
+    </div>
+  );
+}
+
+// ============================================
+// 3.5. DeadPlayerPhaseCard — 死亡角色阶段提示卡片
+// ============================================
+
+export function DeadPlayerPhaseCard({ game }: { game: Game }) {
+  const handleConfirmAdvance = () => {
+    wsService.send({ type: 'GOD_ADVANCE_PHASE' });
+  };
+
+  // 找到当前阶段对应的角色配置
+  const currentConfig = NIGHT_ROLE_CONFIGS.find(cfg => cfg.phaseKey === game.currentPhase);
+
+  return (
+    <div className="mx-2 p-3 rounded-xl border-2 bg-red-500/10 border-red-500/40">
+      <div className="flex items-center gap-2 mb-2">
+        <span className="text-sm">💀</span>
+        <span className="text-sm font-bold text-red-400">
+          {currentConfig ? currentConfig.label : game.currentPhase} — 已阵亡
+        </span>
+      </div>
+      <div className="text-[11px] text-gray-400 mb-2">
+        该角色已死亡，阶段保留以防止信息泄露。请假装操作后点击确认推进。
+      </div>
+      <button
+        onClick={handleConfirmAdvance}
+        className="w-full py-2 text-xs font-bold rounded-lg transition border bg-red-600/30 hover:bg-red-600/50 border-red-500/50 text-red-300"
+      >
+        确认推进 →
+      </button>
     </div>
   );
 }

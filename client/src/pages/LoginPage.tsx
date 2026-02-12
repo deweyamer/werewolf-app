@@ -113,7 +113,7 @@ export default function LoginPage() {
         <h1 className="text-4xl font-bold text-white text-center mb-8">
           🐺 狼人杀
         </h1>
-        <p className="text-gray-300 text-center mb-8">摄梦人12人版</p>
+        <p className="text-gray-300 text-center mb-8">线下面杀版</p>
 
         <div className="flex justify-center mb-6">
           <button

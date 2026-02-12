@@ -1,4 +1,4 @@
-import { Game, GamePlayer, GameEvent, ActionLog, ExileVoteState, SheriffElectionState, NightActionsState, RoundHistoryEntry } from '../../../shared/src/types';
+import { Game, GamePlayer, GameEvent, ActionLog, ExileVoteState, SheriffElectionState, NightActionsState, RoundHistoryEntry, SheriffTransferRecord } from '../../../shared/src/types';
 import { translateDeathReason } from './phaseLabels';
 
 let eventCounter = 0;
@@ -133,6 +133,13 @@ export function deriveEventsFromHistory(game: Game): GameEvent[] {
       if (round.exileVote?.phase === 'done') {
         events.push(formatVoteResultEvent(round.exileVote, round.round, players));
       }
+
+      // 警徽移交/流失
+      if (round.sheriffTransfers && round.sheriffTransfers.length > 0) {
+        for (const transfer of round.sheriffTransfers) {
+          events.push(formatSheriffTransferEvent(transfer, round.round, players));
+        }
+      }
     }
   }
 
@@ -151,8 +158,9 @@ export function deriveEventsFromHistory(game: Game): GameEvent[] {
     }
   }
 
-  // 3. 警徽流失
-  if (game.sheriffBadgeState === 'destroyed') {
+  // 3. 警徽流失（兜底：仅在 roundHistory 中没有 sheriffTransfers 记录时才使用）
+  const hasTransferRecords = (game.roundHistory || []).some(r => r.sheriffTransfers && r.sheriffTransfers.length > 0);
+  if (game.sheriffBadgeState === 'destroyed' && !hasTransferRecords) {
     events.push({
       id: nextId('history-sheriff-destroyed'),
       timestamp: new Date().toISOString(),
@@ -272,6 +280,28 @@ export function formatVoteResultEvent(exileVote: ExileVoteState, round: number, 
   };
 }
 
+export function formatSheriffTransferEvent(transfer: SheriffTransferRecord, round: number, players: GamePlayer[]): GameEvent {
+  if (transfer.toPlayerId === 'destroyed') {
+    return {
+      id: nextId(`sheriff-transfer-destroyed-${round}`),
+      timestamp: new Date().toISOString(),
+      round,
+      type: 'sheriff_transfer',
+      icon: '✕',
+      text: '警徽已流失',
+    };
+  }
+  const newSheriff = players.find(p => p.playerId === transfer.toPlayerId);
+  return {
+    id: nextId(`sheriff-transfer-${round}-${transfer.toPlayerId}`),
+    timestamp: new Date().toISOString(),
+    round,
+    type: 'sheriff_transfer',
+    icon: '→★',
+    text: `警徽传递给 ${transfer.toPlayerId}号${newSheriff ? ' ' + newSheriff.username : ''}`,
+  };
+}
+
 /**
  * God 视角：从 NightActionsState 生成夜间行动事件
  */
@@ -359,6 +389,13 @@ export function deriveGodEventsFromRoundHistory(
   // 放逐投票
   if (entry.exileVote?.phase === 'done') {
     events.push(formatVoteResultEvent(entry.exileVote, entry.round, players));
+  }
+
+  // 警徽移交/流失
+  if (entry.sheriffTransfers && entry.sheriffTransfers.length > 0) {
+    for (const transfer of entry.sheriffTransfers) {
+      events.push(formatSheriffTransferEvent(transfer, entry.round, players));
+    }
   }
 
   return events;

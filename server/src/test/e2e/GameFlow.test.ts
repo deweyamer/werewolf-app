@@ -76,6 +76,16 @@ describe('端到端游戏流程测试', () => {
       if (game.currentPhase === targetPhase) {
         return;
       }
+      // 第一轮 settle 后可能进入警长竞选，快速跳过
+      if (game.currentPhase === 'sheriffElection' && !game.sheriffElectionDone) {
+        await gameService.startSheriffCampaign(gameId);
+        const updatedGame = gameService.getGame(gameId)!;
+        if (updatedGame.sheriffElectionDone) {
+          await gameService.advancePhase(gameId);
+          iterations++;
+          continue;
+        }
+      }
       await gameService.advancePhase(gameId);
       iterations++;
     }
@@ -638,7 +648,7 @@ describe('端到端游戏流程测试', () => {
   });
 
   describe('Corner Cases - 边界情况测试', () => {
-    it('女巫不能自救后再次使用解药', async () => {
+    it('女巫解药只能使用一次', async () => {
       const roleAssignments = {
         1: 'wolf',
         2: 'wolf',
@@ -656,9 +666,9 @@ describe('端到端游戏流程测试', () => {
 
       const game = await createTestGame('dreamer-nightmare', roleAssignments);
 
-      // 第一晚：狼刀女巫，女巫自救
+      // 第一晚：狼刀9号（非女巫），女巫救人
       await advanceToPhase(game.id, 'wolf');
-      await submitAction(game.id, 1, 7); // 刀女巫
+      await submitAction(game.id, 1, 9); // 刀9号
       await gameService.advancePhase(game.id);
 
       await advanceToPhase(game.id, 'witch');
@@ -669,10 +679,10 @@ describe('端到端游戏流程测试', () => {
       await advanceToPhase(game.id, 'settle');
       await gameService.advancePhase(game.id);
 
-      // 女巫应该还活着
+      // 9号应该还活着（被女巫救了）
       let updatedGame = gameService.getGame(game.id)!;
-      let witch = updatedGame.players.find(p => p.playerId === 7)!;
-      expect(witch.alive).toBe(true);
+      let target = updatedGame.players.find(p => p.playerId === 9)!;
+      expect(target.alive).toBe(true);
 
       // 跳过白天
       await advanceToPhase(game.id, 'discussion');
